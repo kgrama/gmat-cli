@@ -93,14 +93,21 @@ impl AnyGraphMatrix {
         }
     }
 
-    /// Calculate sparsity as ratio of non-zero to total elements.
-    pub fn sparsity(&self) -> f32 {
+    /// Calculate density as ratio of non-zero to total elements.
+    /// Returns 1.0 for a fully dense matrix, 0.0 for an all-zeros matrix.
+    pub fn density(&self) -> f32 {
         match self {
-            Self::B16x8(m) => m.sparsity(),
-            Self::B16x4(m) => m.sparsity(),
-            Self::B8x8(m) => m.sparsity(),
-            Self::B8x4(m) => m.sparsity(),
+            Self::B16x8(m) => m.density(),
+            Self::B16x4(m) => m.density(),
+            Self::B8x8(m) => m.density(),
+            Self::B8x4(m) => m.density(),
         }
+    }
+
+    /// Alias for density() - deprecated, use density() instead.
+    #[deprecated(note = "Use density() instead - this returns nnz/total, not sparsity")]
+    pub fn sparsity(&self) -> f32 {
+        self.density()
     }
 
     /// Calculate total memory usage in bytes.
@@ -328,14 +335,21 @@ impl DualAnyGraphMatrix {
         }
     }
 
-    /// Calculate sparsity as ratio of non-zero to total elements.
-    pub fn sparsity(&self) -> f32 {
+    /// Calculate density as ratio of non-zero to total elements.
+    /// Returns 1.0 for a fully dense matrix, 0.0 for an all-zeros matrix.
+    pub fn density(&self) -> f32 {
         match self {
-            Self::DualRow8x4(m) => m.sparsity(),
-            Self::DualRow8x8(m) => m.sparsity(),
-            Self::DualRow16x4(m) => m.sparsity(),
-            Self::DualRow16x8(m) => m.sparsity(),
+            Self::DualRow8x4(m) => m.density(),
+            Self::DualRow8x8(m) => m.density(),
+            Self::DualRow16x4(m) => m.density(),
+            Self::DualRow16x8(m) => m.density(),
         }
+    }
+
+    /// Alias for density() - deprecated, use density() instead.
+    #[deprecated(note = "Use density() instead - this returns nnz/total, not sparsity")]
+    pub fn sparsity(&self) -> f32 {
+        self.density()
     }
 
     /// Calculate total memory usage in bytes.
@@ -675,7 +689,7 @@ mod tests {
         let config = StorageConfig::new();
         let matrix = AnyGraphMatrix::from_dense(&data, (1, 16), &config);
 
-        assert_eq!(matrix.sparsity(), 0.5);
+        assert_eq!(matrix.density(), 0.5);
     }
 
     #[test]
@@ -945,12 +959,12 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_any_graph_matrix_sparsity() {
+    fn test_dual_any_graph_matrix_density() {
         let data = narrow_range_data(8, 4);
         let config = StorageConfig::new().format(BlockFormat::DualRow8x4);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (4, 8), &config);
-        let sparsity = matrix.sparsity();
-        assert!(sparsity >= 0.0 && sparsity <= 1.0);
+        let density = matrix.density();
+        assert!(density >= 0.0 && density <= 1.0);
     }
 
     #[test]

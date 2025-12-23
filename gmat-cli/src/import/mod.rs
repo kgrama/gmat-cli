@@ -118,11 +118,45 @@ fn collect_tensor_mappings(safetensor_files: &[std::path::PathBuf]) -> Result<Ve
 
 /// Write the final metadata.json file.
 fn write_import_metadata(output_dir: &Path, config: &ImportConfig, saved: &[SavedTensor]) -> Result<()> {
+    // Build tensor_name_map with nested structure for N-D tensors
+    let mut tensor_name_map = serde_json::Map::new();
+    let mut nd_tensors: HashMap<String, Vec<&SavedTensor>> = HashMap::new();
+
+    for s in saved {
+        if s.num_planes.is_some() {
+            // N-D tensor plane - group by base name (without [idx])
+            let base_name = s.name.split('[').next().unwrap_or(&s.name);
+            nd_tensors.entry(base_name.to_string()).or_default().push(s);
+        } else {
+            // Regular 2D tensor - simple string mapping
+            tensor_name_map.insert(s.name.clone(), serde_json::json!(s.uuid));
+        }
+    }
+
+    // Add N-D tensors as nested blocks
+    for (base_name, planes) in nd_tensors {
+        // Sort by plane index
+        let mut planes = planes;
+        planes.sort_by_key(|p| p.plane_index.unwrap_or(0));
+
+        let first = planes.first().unwrap();
+        let original_shape = first.original_shape.as_ref().unwrap();
+        let num_planes = first.num_planes.unwrap();
+        let (rows, cols) = first.matrix_shape;
+
+        let plane_uuids: Vec<&str> = planes.iter().map(|p| p.uuid.as_str()).collect();
+
+        tensor_name_map.insert(base_name, serde_json::json!({
+            "original_shape": original_shape,
+            "matrix_shape": [rows, cols],
+            "num_planes": num_planes,
+            "plane_uuids": plane_uuids,
+        }));
+    }
+
     let metadata_json = serde_json::json!({
         "config": config,
-        "tensor_name_map": saved.iter()
-            .map(|s| (s.name.as_str(), s.uuid.as_str()))
-            .collect::<HashMap<_, _>>(),
+        "tensor_name_map": tensor_name_map,
         "total_tensors": saved.len(),
     });
 

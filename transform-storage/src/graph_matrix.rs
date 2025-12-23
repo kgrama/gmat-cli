@@ -181,14 +181,21 @@ impl GraphMatrix {
         self.row_blocks.iter().map(|block| block.nnz()).sum()
     }
 
-    /// Calculate sparsity as ratio of non-zero to total elements.
-    pub fn sparsity(&self) -> f32 {
+    /// Calculate density as ratio of non-zero to total elements.
+    /// Returns 1.0 for a fully dense matrix, 0.0 for an all-zeros matrix.
+    pub fn density(&self) -> f32 {
         let (rows, cols) = self.shape;
         let total_elements = rows * cols;
         if total_elements == 0 {
             return 0.0;
         }
         self.nnz() as f32 / total_elements as f32
+    }
+
+    /// Alias for density() - deprecated, use density() instead.
+    #[deprecated(note = "Use density() instead - this returns nnz/total, not sparsity")]
+    pub fn sparsity(&self) -> f32 {
+        self.density()
     }
 
     /// Calculate total memory usage in bytes.
@@ -887,7 +894,7 @@ mod tests {
 
         assert_eq!(matrix.shape(), (4, 16));
         assert_eq!(matrix.nnz(), 0);
-        assert_eq!(matrix.sparsity(), 0.0);
+        assert_eq!(matrix.density(), 0.0);
     }
 
     #[test]
@@ -897,7 +904,7 @@ mod tests {
 
         assert_eq!(matrix.shape(), (2, 16));
         assert_eq!(matrix.nnz(), 32);
-        assert_eq!(matrix.sparsity(), 1.0);
+        assert_eq!(matrix.density(), 1.0);
     }
 
     #[test]
@@ -940,7 +947,7 @@ mod tests {
     }
 
     // ========================================================================
-    // nnz and sparsity tests
+    // nnz and density tests
     // ========================================================================
 
     #[test]
@@ -956,20 +963,20 @@ mod tests {
     }
 
     #[test]
-    fn test_sparsity_half() {
+    fn test_density_half() {
         let mut data = vec![0.0f32; 16];
         for i in 0..8 {
             data[i] = (i + 1) as f32;
         }
 
         let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
-        assert_eq!(matrix.sparsity(), 0.5);
+        assert_eq!(matrix.density(), 0.5);
     }
 
     #[test]
-    fn test_sparsity_empty_matrix() {
+    fn test_density_empty_matrix() {
         let matrix = GraphMatrix::from_dense(&[], (0, 0), BlockFormat::B16x8);
-        assert_eq!(matrix.sparsity(), 0.0);
+        assert_eq!(matrix.density(), 0.0);
     }
 
     // ========================================================================
