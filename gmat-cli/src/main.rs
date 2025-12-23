@@ -50,6 +50,10 @@ enum Commands {
         #[arg(short, long)]
         output: Option<String>,
 
+        /// Shard size in MB (e.g., 5000 for 5GB). Overrides config file.
+        #[arg(long)]
+        shard_size: Option<u64>,
+
         /// Generate a template config instead of exporting
         #[arg(long)]
         generate_config: bool,
@@ -76,12 +80,15 @@ fn main() -> anyhow::Result<()> {
             model,
             config,
             output,
+            shard_size,
             generate_config,
         } => {
             if generate_config {
                 export::generate_config_template(&model)?;
             } else {
-                export::run(&model, config.as_deref(), output.as_deref())?;
+                // Convert MB to bytes if provided
+                let shard_bytes = shard_size.map(|mb| mb * 1_000_000);
+                export::run(&model, config.as_deref(), output.as_deref(), shard_bytes)?;
             }
         }
     }
