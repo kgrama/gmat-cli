@@ -81,6 +81,46 @@ pub fn run_streaming_import(
     ))
 }
 
+/// Producer task: extract tensors from safetensor files.
+async fn produce_tensors_task(
+    files: Vec<PathBuf>,
+    tensor_map: HashMap<String, String>,
+    tx: mpsc::Sender<ExtractedTensor>,
+    state: Arc<PipelineState>,
+) -> Result<()> {
+    for file_path in &files {
+        if let Err(e) = extract_and_send_tensors(&file_path, &tensor_map, &tx, &state).await {
+            eprintln!("Warning: Failed to process {}: {}", file_path.display(), e);
+        }
+    }
+    Ok(())
+}
+
+/// Writer task: collect results and print progress.
+async fn collect_results_task(
+    mut rx: mpsc::Receiver<Result<SavedTensor>>,
+    state: Arc<PipelineState>,
+    results: Arc<std::sync::Mutex<Vec<SavedTensor>>>,
+    total: usize,
+) -> Result<()> {
+    while let Some(result) = rx.recv().await {
+        match result {
+            Ok(saved) => {
+                let completed = state.inc_completed();
+                println!(
+                    "[{}/{}] {} -> {}.gmat",
+                    completed, total, saved.name, saved.uuid
+                );
+                results.lock().unwrap().push(saved);
+            }
+            Err(e) => {
+                eprintln!("Warning: {}", e);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Async implementation of streaming import.
 async fn run_streaming_import_async(
     safetensor_files: &[PathBuf],
@@ -106,37 +146,13 @@ async fn run_streaming_import_async(
         buffer_size,
         buffer_size,
         // Producer: extract tensors from safetensor files
-        move |tx: mpsc::Sender<ExtractedTensor>, state: Arc<PipelineState>| async move {
-            for file_path in &files {
-                if let Err(e) = extract_and_send_tensors(&file_path, &tensor_map_owned, &tx, &state).await {
-                    eprintln!("Warning: Failed to process {}: {}", file_path.display(), e);
-                }
-            }
-            Ok(())
-        },
+        move |tx, state| produce_tensors_task(files, tensor_map_owned, tx, state),
         // Worker: convert tensor to GMAT format (runs on rayon)
         move |tensor: ExtractedTensor| -> Result<SavedTensor> {
             convert_tensor(&tensor, &tensors_dir_owned, &config_owned, block_format)
         },
         // Writer: collect results and print progress
-        move |mut rx: mpsc::Receiver<Result<SavedTensor>>, state: Arc<PipelineState>| async move {
-            while let Some(result) = rx.recv().await {
-                match result {
-                    Ok(saved) => {
-                        let completed = state.inc_completed();
-                        println!(
-                            "[{}/{}] {} -> {}.gmat",
-                            completed, total, saved.name, saved.uuid
-                        );
-                        results_for_writer.lock().unwrap().push(saved);
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: {}", e);
-                    }
-                }
-            }
-            Ok(())
-        },
+        move |rx, state| collect_results_task(rx, state, results_for_writer, total),
     ).await?;
 
     let saved = Arc::try_unwrap(results)
@@ -145,6 +161,68 @@ async fn run_streaming_import_async(
         .unwrap();
 
     Ok(saved)
+}
+
+/// Normalize tensor shape to 2D representation.
+/// Returns (num_planes, rows, cols) where planes represent leading dimensions.
+fn normalize_tensor_shape(shape: &[usize]) -> (usize, usize, usize) {
+    match shape.len() {
+        0 => (1, 1, 1), // scalar
+        1 => (1, 1, shape[0]), // 1D -> 1xN
+        2 => (1, shape[0], shape[1]), // 2D -> 1 plane
+        _ => {
+            // N-D: leading dims are planes, last 2 dims are matrix
+            let planes: usize = shape[..shape.len() - 2].iter().product();
+            let rows = shape[shape.len() - 2];
+            let cols = shape[shape.len() - 1];
+            (planes, rows, cols)
+        }
+    }
+}
+
+/// Send a single tensor plane to the processing channel.
+async fn send_tensor_plane(
+    tx: &mpsc::Sender<ExtractedTensor>,
+    state: &PipelineState,
+    tensor_name: &str,
+    target_uuid: &str,
+    plane_idx: usize,
+    num_planes: usize,
+    rows: usize,
+    cols: usize,
+    f32_data: &[f32],
+    original_shape: Vec<usize>,
+    dtype_str: String,
+) -> Result<bool> {
+    let plane_size = rows * cols;
+    let start = plane_idx * plane_size;
+    let end = start + plane_size;
+
+    let plane_uuid = if num_planes > 1 {
+        format!("{}_{}", target_uuid, plane_idx)
+    } else {
+        target_uuid.to_string()
+    };
+
+    let plane_name = if num_planes > 1 {
+        format!("{}[{}]", tensor_name, plane_idx)
+    } else {
+        tensor_name.to_string()
+    };
+
+    let plane_data = f32_data[start..end].to_vec();
+
+    state.inc_produced();
+    Ok(tx.send(ExtractedTensor {
+        name: plane_name,
+        target_uuid: plane_uuid,
+        shape: (rows, cols),
+        dtype_str,
+        f32_data: plane_data,
+        original_shape,
+        plane_index: if num_planes > 1 { Some(plane_idx) } else { None },
+        num_planes,
+    }).await.is_ok())
 }
 
 /// Extract tensors from a safetensor file and send to channel.
@@ -176,51 +254,25 @@ async fn extract_and_send_tensors(
             }
         };
 
-        // Normalize shape to 2D: treat last 2 dims as matrix, leading dims as planes
-        let (num_planes, rows, cols) = match shape.len() {
-            0 => (1, 1, 1), // scalar
-            1 => (1, 1, shape[0]), // 1D -> 1xN
-            2 => (1, shape[0], shape[1]), // 2D -> 1 plane
-            _ => {
-                let planes: usize = shape[..shape.len() - 2].iter().product();
-                let r = shape[shape.len() - 2];
-                let c = shape[shape.len() - 1];
-                (planes, r, c)
-            }
-        };
-
-        let plane_size = rows * cols;
+        let (num_planes, rows, cols) = normalize_tensor_shape(shape);
         let dtype_str = format!("{:?}", dtype);
 
         for plane_idx in 0..num_planes {
-            let start = plane_idx * plane_size;
-            let end = start + plane_size;
-
-            let plane_uuid = if num_planes > 1 {
-                format!("{}_{}", target_uuid, plane_idx)
-            } else {
-                target_uuid.clone()
-            };
-
-            let plane_name = if num_planes > 1 {
-                format!("{}[{}]", tensor_name, plane_idx)
-            } else {
-                tensor_name.to_string()
-            };
-
-            let plane_data = f32_data[start..end].to_vec();
-
-            state.inc_produced();
-            if tx.send(ExtractedTensor {
-                name: plane_name,
-                target_uuid: plane_uuid,
-                shape: (rows, cols),
-                dtype_str: dtype_str.clone(),
-                f32_data: plane_data,
-                original_shape: shape.to_vec(),
-                plane_index: if num_planes > 1 { Some(plane_idx) } else { None },
+            let send_ok = send_tensor_plane(
+                tx,
+                state,
+                &tensor_name,
+                &target_uuid,
+                plane_idx,
                 num_planes,
-            }).await.is_err() {
+                rows,
+                cols,
+                &f32_data,
+                shape.to_vec(),
+                dtype_str.clone(),
+            ).await?;
+
+            if !send_ok {
                 return Ok(());
             }
         }

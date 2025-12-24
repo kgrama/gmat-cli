@@ -3,7 +3,10 @@
 use crate::blocks::{AnyBlock, BlockFormat};
 use candle_core::{Tensor, Result};
 use crate::formats::GmatMetadata;
-use rayon::prelude::*;
+
+mod layout;
+mod stats;
+mod encoding;
 
 /// Block-based sparse matrix with optional column index.
 ///
@@ -31,13 +34,7 @@ impl GraphMatrix {
     /// Calculate number of blocks per row (or per column for col-major).
     #[inline]
     pub(crate) fn blocks_per_row(&self) -> usize {
-        Self::calc_blocks_per_row(self.shape.1, self.format.block_size())
-    }
-
-    /// Static helper: calculate blocks per row given cols and block_size.
-    #[inline]
-    fn calc_blocks_per_row(cols: usize, block_size: usize) -> usize {
-        (cols + block_size - 1) / block_size
+        layout::calc_blocks_per_row(self.shape.1, self.format.block_size())
     }
 
     /// Calculate the block offset for a given row in row_blocks.
@@ -57,67 +54,6 @@ impl GraphMatrix {
         if self.format.is_dual_row() { row % 2 } else { 0 }
     }
 
-    /// Calculate expected block count for given shape and format.
-    fn expected_block_count(rows: usize, cols: usize, format: &BlockFormat) -> usize {
-        let block_size = format.block_size();
-        let blocks_per_row = Self::calc_blocks_per_row(cols, block_size);
-        if format.is_dual_row() {
-            let row_pairs = (rows + 1) / 2;
-            row_pairs * blocks_per_row
-        } else {
-            rows * blocks_per_row
-        }
-    }
-
-    // ========================================================================
-    // Encoding helpers
-    // ========================================================================
-
-    /// Encode a single-row block using the given format.
-    fn encode_single_row_block(format: BlockFormat, data: &[f32]) -> AnyBlock {
-        match format {
-            BlockFormat::B8x4 => AnyBlock::encode_8x4(data),
-            BlockFormat::B8x8 => AnyBlock::encode_8x8(data),
-            BlockFormat::B16x4 => AnyBlock::encode_16x4(data),
-            BlockFormat::B16x8 => AnyBlock::encode_16x8(data),
-            _ => unreachable!("encode_single_row_block called with dual-row format"),
-        }
-    }
-
-    /// Encode a dual-row block using the given format.
-    fn encode_dual_row_block(format: BlockFormat, row0: &[f32], row1: &[f32]) -> AnyBlock {
-        match format {
-            BlockFormat::DualRow8x4 => AnyBlock::encode_dualrow_8x4(row0, row1),
-            BlockFormat::DualRow8x8 => AnyBlock::encode_dualrow_8x8(row0, row1),
-            BlockFormat::DualRow16x4 => AnyBlock::encode_dualrow_16x4(row0, row1),
-            BlockFormat::DualRow16x8 => AnyBlock::encode_dualrow_16x8(row0, row1),
-            _ => unreachable!("encode_dual_row_block called with single-row format"),
-        }
-    }
-
-    /// Copy a row segment into a buffer, zero-padding only the tail if needed.
-    #[inline]
-    fn copy_row_segment(
-        data: &[f32],
-        row: usize,
-        cols: usize,
-        block_col_start: usize,
-        block_len: usize,
-        buffer: &mut [f32],
-    ) {
-        if row * cols < data.len() {
-            let data_start = row * cols + block_col_start;
-            let data_end = data_start + block_len;
-            buffer[..block_len].copy_from_slice(&data[data_start..data_end]);
-            // Only zero-pad the tail if block_len < buffer.len()
-            if block_len < buffer.len() {
-                buffer[block_len..].fill(0.0);
-            }
-        } else {
-            buffer.fill(0.0);
-        }
-    }
-
     // ========================================================================
     // Constructors
     // ========================================================================
@@ -133,7 +69,7 @@ impl GraphMatrix {
     /// Panics if block count doesn't match expected
     pub fn from_blocks(row_blocks: Vec<AnyBlock>, shape: (usize, usize), format: BlockFormat) -> Self {
         let (rows, cols) = shape;
-        let expected_blocks = Self::expected_block_count(rows, cols, &format);
+        let expected_blocks = layout::expected_block_count(rows, cols, &format);
 
         assert_eq!(
             row_blocks.len(),
@@ -174,48 +110,12 @@ impl GraphMatrix {
         );
 
         let block_size = format.block_size();
-        let blocks_per_row = Self::calc_blocks_per_row(cols, block_size);
+        let blocks_per_row = layout::calc_blocks_per_row(cols, block_size);
 
         let row_blocks = if format.is_dual_row() {
-            let row_pairs = (rows + 1) / 2;
-            (0..row_pairs)
-                .into_par_iter()
-                .flat_map(|row_pair| {
-                    let row0 = row_pair * 2;
-                    let row1 = row0 + 1;
-
-                    (0..blocks_per_row).map(move |block_idx| {
-                        let block_col_start = block_idx * block_size;
-                        let block_len = (block_col_start + block_size).min(cols) - block_col_start;
-
-                        let mut buf0 = [0.0f32; 16];
-                        let mut buf1 = [0.0f32; 16];
-
-                        Self::copy_row_segment(data, row0, cols, block_col_start, block_len, &mut buf0[..block_size]);
-                        if row1 < rows {
-                            Self::copy_row_segment(data, row1, cols, block_col_start, block_len, &mut buf1[..block_size]);
-                        } else {
-                            buf1[..block_size].fill(0.0);
-                        }
-
-                        Self::encode_dual_row_block(format, &buf0[..block_size], &buf1[..block_size])
-                    }).collect::<Vec<_>>()
-                })
-                .collect()
+            encoding::encode_dual_row_blocks(data, rows, cols, format, block_size, blocks_per_row)
         } else {
-            (0..rows)
-                .into_par_iter()
-                .flat_map(|row| {
-                    (0..blocks_per_row).map(move |block_idx| {
-                        let block_col_start = block_idx * block_size;
-                        let block_len = (block_col_start + block_size).min(cols) - block_col_start;
-
-                        let mut buf = [0.0f32; 16];
-                        Self::copy_row_segment(data, row, cols, block_col_start, block_len, &mut buf[..block_size]);
-                        Self::encode_single_row_block(format, &buf[..block_size])
-                    }).collect::<Vec<_>>()
-                })
-                .collect()
+            encoding::encode_single_row_blocks(data, rows, cols, format, block_size, blocks_per_row)
         };
 
         Self {
@@ -341,7 +241,7 @@ impl GraphMatrix {
             return (0.0, 0.0, 0);
         }
 
-        let log2_center = Self::compute_median(&mut log2_vals);
+        let log2_center = stats::compute_median(&mut log2_vals);
         let log2_range = max_log - min_log;
         (log2_center, log2_range, log2_vals.len())
     }
@@ -365,21 +265,7 @@ impl GraphMatrix {
             }
         }
 
-        Self::compute_median(&mut log2_vals)
-    }
-
-    /// Compute median of a float slice (returns 0.0 for empty).
-    fn compute_median(values: &mut [f32]) -> f32 {
-        if values.is_empty() {
-            return 0.0;
-        }
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mid = values.len() / 2;
-        if values.len() % 2 == 0 {
-            (values[mid - 1] + values[mid]) / 2.0
-        } else {
-            values[mid]
-        }
+        stats::compute_median(&mut log2_vals)
     }
 
     /// Compute log2 center (geometric median) for a specific column.
@@ -392,7 +278,7 @@ impl GraphMatrix {
             .expect("Column index not built. Call build_col_index() first.");
 
         let block_size = self.format.block_size();
-        let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
+        let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
         let col_offset = col * blocks_per_col;
         // Pre-allocate for estimated nnz per column (capped at rows)
         let mut log2_vals = Vec::with_capacity(rows);
@@ -404,7 +290,7 @@ impl GraphMatrix {
             }
         }
 
-        Self::compute_median(&mut log2_vals)
+        stats::compute_median(&mut log2_vals)
     }
 
     /// Iterate over non-zero elements in a specific row.
@@ -489,7 +375,7 @@ impl GraphMatrix {
             .expect("Column index not built. Call build_col_index() first.");
 
         let block_size = self.format.block_size();
-        let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
+        let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
         let col_offset = col * blocks_per_col;
         
         Box::new((0..blocks_per_col)
@@ -549,7 +435,7 @@ impl GraphMatrix {
         }
 
         let block_size = self.format.block_size();
-        let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
+        let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
 
         // Pre-allocate output blocks
         let mut encoded_col_blocks = Vec::with_capacity(cols * blocks_per_col);
@@ -695,7 +581,7 @@ impl GraphMatrix {
         let format = BlockFormat::try_from(header.format)?;
 
         let (rows, cols) = header.shape();
-        let expected_blocks = Self::expected_block_count(rows, cols, &format);
+        let expected_blocks = layout::expected_block_count(rows, cols, &format);
 
         let mut row_blocks = Vec::with_capacity(expected_blocks);
         for _ in 0..expected_blocks {

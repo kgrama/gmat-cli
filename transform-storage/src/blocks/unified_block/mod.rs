@@ -1,11 +1,17 @@
 //! Unified block implementation supporting 1 or 2 rows with const generic ROWS
 
+mod encode_helper;
+mod iteration;
+mod io;
+
 use std::marker::PhantomData;
 use half::f16;
 use std::io::{Read, Write, Result};
 use super::traits::{ElementMask, EncodingStrategy};
 use super::configs::{BlockConfig, Config8x4, Config8x8, Config16x4, Config16x8};
-use crate::block::{Block, EMPTY_SCALE, encode_values, EncodedBlock, get_packed_nibble, set_packed_nibble};
+use crate::block::{Block, EMPTY_SCALE, EncodedBlock, get_packed_nibble, set_packed_nibble};
+
+pub use encode_helper::EncodeHelper;
 
 /// Unified block supporting 1 or 2 rows with const generic ROWS
 #[derive(Debug, Clone, Copy)]
@@ -16,65 +22,6 @@ pub struct UnifiedBlock<const ROWS: usize, C: BlockConfig> {
     pub octave_shift: [C::Mask; 2],
     pub magnitudes: [[u8; 16]; 2],   // Fixed size 2
     _phantom: PhantomData<C>,
-}
-
-// ============================================================================
-// Helper trait for SIZE dispatch (8 vs 16 elements)
-// ============================================================================
-
-mod private {
-    use super::*;
-    pub trait Sealed {}
-    impl Sealed for Config8x4 {}
-    impl Sealed for Config8x8 {}
-    impl Sealed for Config16x4 {}
-    impl Sealed for Config16x8 {}
-}
-
-/// Helper trait for SIZE dispatch (8 vs 16 elements)
-/// This trait is sealed and only implemented for Config8x4, Config8x8, Config16x4, Config16x8
-pub trait EncodeHelper: private::Sealed {
-    fn do_encode(values: &[f32]) -> EncodedBlock<16>;
-}
-
-impl EncodeHelper for Config8x4 {
-    fn do_encode(values: &[f32]) -> EncodedBlock<16> {
-        let enc = encode_values::<8>(values);
-        let mut offsets = [0.0f32; 16];
-        offsets[..8].copy_from_slice(&enc.log_offsets);
-        EncodedBlock {
-            scale_log: enc.scale_log,
-            zero_map: enc.zero_map,
-            signs: enc.signs,
-            log_offsets: offsets,
-        }
-    }
-}
-
-impl EncodeHelper for Config8x8 {
-    fn do_encode(values: &[f32]) -> EncodedBlock<16> {
-        let enc = encode_values::<8>(values);
-        let mut offsets = [0.0f32; 16];
-        offsets[..8].copy_from_slice(&enc.log_offsets);
-        EncodedBlock {
-            scale_log: enc.scale_log,
-            zero_map: enc.zero_map,
-            signs: enc.signs,
-            log_offsets: offsets,
-        }
-    }
-}
-
-impl EncodeHelper for Config16x4 {
-    fn do_encode(values: &[f32]) -> EncodedBlock<16> {
-        encode_values::<16>(values)
-    }
-}
-
-impl EncodeHelper for Config16x8 {
-    fn do_encode(values: &[f32]) -> EncodedBlock<16> {
-        encode_values::<16>(values)
-    }
 }
 
 // ============================================================================
@@ -282,137 +229,6 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
         } else {
             ROWS * (3 * C::MASK_SIZE + C::MAG_ARRAY_SIZE) + 2
         }
-    }
-
-    /// Iterator over non-zero elements in a specific row
-    pub fn row_iter(&self, row: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
-        let magnitudes = if row < ROWS { self.magnitudes[row] } else { [0u8; 16] };
-        let octave_shift = if row < ROWS { self.octave_shift[row] } else { C::Mask::default() };
-        let signs = if row < ROWS { self.signs[row] } else { C::Mask::default() };
-        let zero_map = if row < ROWS { self.zero_map[row] } else { C::Mask::default() };
-        let scale_log = self.scale_log.to_f32();
-        let is_empty = self.is_empty();
-        let bits = C::Encoding::BITS;
-        let shift_amount = C::Encoding::SHIFT_AMOUNT;
-        let valid_row = row < ROWS;
-
-        (0..C::SIZE).filter_map(move |i| {
-            if !valid_row || is_empty || (zero_map >> i) & C::Mask::from(1u8) == C::Mask::default() {
-                None
-            } else {
-                let base_offset = if bits == 4 {
-                    C::Encoding::decode(get_packed_nibble(&magnitudes, i))
-                } else {
-                    C::Encoding::decode(magnitudes[i])
-                };
-
-                let is_shifted = (octave_shift >> i) & C::Mask::from(1u8) == C::Mask::from(1u8);
-                let actual_offset = if is_shifted { base_offset + shift_amount } else { base_offset };
-
-                let sign = if (signs >> i) & C::Mask::from(1u8) == C::Mask::from(1u8) { -1.0 } else { 1.0 };
-                let value = sign * f32::exp2(scale_log + actual_offset);
-                Some((i, value))
-            }
-        })
-    }
-
-    /// Iterator over log-space values for non-zero elements in a specific row
-    /// Returns (index, log2_magnitude, sign) where sign is 1 for negative, 0 for positive
-    pub fn log_row_iter(&self, row: usize) -> impl Iterator<Item = (usize, f32, u8)> + '_ {
-        let magnitudes = if row < ROWS { self.magnitudes[row] } else { [0u8; 16] };
-        let octave_shift = if row < ROWS { self.octave_shift[row] } else { C::Mask::default() };
-        let signs = if row < ROWS { self.signs[row] } else { C::Mask::default() };
-        let zero_map = if row < ROWS { self.zero_map[row] } else { C::Mask::default() };
-        let scale_log = self.scale_log.to_f32();
-        let is_empty = self.is_empty();
-        let bits = C::Encoding::BITS;
-        let shift_amount = C::Encoding::SHIFT_AMOUNT;
-        let valid_row = row < ROWS;
-
-        (0..C::SIZE).filter_map(move |i| {
-            if !valid_row || is_empty || (zero_map >> i) & C::Mask::from(1u8) == C::Mask::default() {
-                None
-            } else {
-                let base_offset = if bits == 4 {
-                    C::Encoding::decode(get_packed_nibble(&magnitudes, i))
-                } else {
-                    C::Encoding::decode(magnitudes[i])
-                };
-
-                let is_shifted = (octave_shift >> i) & C::Mask::from(1u8) == C::Mask::from(1u8);
-                let actual_offset = if is_shifted { base_offset + shift_amount } else { base_offset };
-
-                let log2_magnitude = scale_log + actual_offset;
-                let sign = if (signs >> i) & C::Mask::from(1u8) == C::Mask::from(1u8) { 1u8 } else { 0u8 };
-                Some((i, log2_magnitude, sign))
-            }
-        })
-    }
-
-    /// Write block to binary stream
-    pub fn write_to<W: Write>(&self, w: &mut W) -> Result<()> {
-        // Write all zero_maps first (for ROWS rows)
-        for i in 0..ROWS {
-            self.zero_map[i].write_le(w)?;
-        }
-
-        // If empty, stop
-        if self.is_empty() {
-            return Ok(());
-        }
-
-        // Write shared scale_log
-        w.write_all(&self.scale_log.to_bits().to_le_bytes())?;
-
-        // Write data for each row
-        for i in 0..ROWS {
-            self.signs[i].write_le(w)?;
-            self.octave_shift[i].write_le(w)?;
-            w.write_all(&self.magnitudes[i][..C::MAG_ARRAY_SIZE])?;
-        }
-
-        Ok(())
-    }
-
-    /// Read block from binary stream
-    pub fn read_from<R: Read>(r: &mut R) -> Result<Self> {
-        // Read zero_maps for all rows
-        let mut zero_map = [C::Mask::default(); 2];
-        for i in 0..ROWS {
-            zero_map[i] = C::Mask::read_le(r)?;
-        }
-
-        // Check if empty
-        let is_empty = (0..ROWS).all(|i| zero_map[i] == C::Mask::default());
-        
-        if is_empty {
-            return Ok(Self::new_empty());
-        }
-
-        // Read shared scale_log
-        let mut scale_bytes = [0u8; 2];
-        r.read_exact(&mut scale_bytes)?;
-        let scale_log = f16::from_bits(u16::from_le_bytes(scale_bytes));
-
-        // Read data for each row
-        let mut signs = [C::Mask::default(); 2];
-        let mut octave_shift = [C::Mask::default(); 2];
-        let mut magnitudes = [[0u8; 16]; 2];
-
-        for i in 0..ROWS {
-            signs[i] = C::Mask::read_le(r)?;
-            octave_shift[i] = C::Mask::read_le(r)?;
-            r.read_exact(&mut magnitudes[i][..C::MAG_ARRAY_SIZE])?;
-        }
-
-        Ok(Self {
-            scale_log,
-            zero_map,
-            signs,
-            octave_shift,
-            magnitudes,
-            _phantom: PhantomData,
-        })
     }
 }
 

@@ -168,23 +168,12 @@ enum QuantizeEntry {
     },
 }
 
-/// Generate an export config template from a GMAT model.
-pub fn generate_config_template(model_path: &str) -> Result<()> {
-    let (model_dir, metadata) = load_gmat_model(model_path)?;
-
-    let tensor_map = metadata["tensor_name_map"]
-        .as_object()
-        .context("tensor_name_map not found in metadata.json")?;
-
-    println!("Analyzing {} tensors...", tensor_map.len());
-
-    let tensors_dir = model_dir.join("tensors");
-
-    // Collect tensor entries for parallel processing
-    let tensor_entries: Vec<(&String, &serde_json::Value)> = tensor_map.iter().collect();
-
-    // Analyze tensors in parallel
-    let analyses: Vec<TensorAnalysis> = tensor_entries
+/// Analyze tensors in parallel and compute importance/quantization recommendations.
+fn analyze_model_tensors(
+    tensor_entries: Vec<(&String, &serde_json::Value)>,
+    tensors_dir: &std::path::Path,
+) -> Vec<TensorAnalysis> {
+    tensor_entries
         .par_iter()
         .filter_map(|(source_name, json_value)| {
             let entry = TensorEntry::from_json(json_value)?;
@@ -233,9 +222,11 @@ pub fn generate_config_template(model_path: &str) -> Result<()> {
                 quant_type,
             })
         })
-        .collect();
+        .collect()
+}
 
-    // Print results and build config
+/// Build export config from tensor analyses and write to file.
+fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Result<()> {
     let mut tensor_mappings = Vec::with_capacity(analyses.len());
     let mut per_tensor_quant = HashMap::with_capacity(analyses.len());
 
@@ -273,7 +264,7 @@ pub fn generate_config_template(model_path: &str) -> Result<()> {
 
     println!(
         "\nGenerated export_config.json ({} tensors)",
-        tensor_map.len()
+        analyses.len()
     );
     println!(
         "Run: gmat export --model {} --config export_config.json -o model.gguf",
@@ -281,6 +272,78 @@ pub fn generate_config_template(model_path: &str) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Generate an export config template from a GMAT model.
+pub fn generate_config_template(model_path: &str) -> Result<()> {
+    let (model_dir, metadata) = load_gmat_model(model_path)?;
+
+    let tensor_map = metadata["tensor_name_map"]
+        .as_object()
+        .context("tensor_name_map not found in metadata.json")?;
+
+    println!("Analyzing {} tensors...", tensor_map.len());
+
+    let tensors_dir = model_dir.join("tensors");
+
+    // Collect tensor entries for parallel processing
+    let tensor_entries: Vec<(&String, &serde_json::Value)> = tensor_map.iter().collect();
+
+    // Analyze tensors in parallel
+    let analyses = analyze_model_tensors(tensor_entries, &tensors_dir);
+
+    // Build and write config
+    build_and_write_config(analyses, model_path)
+}
+
+/// Quantize a single tensor job (worker function for pipeline).
+fn quantize_tensor_job(job: QuantizeJob, scale_opt: ScaleOptimization) -> Result<ProcessedTensor> {
+    match &job.tensor_entry {
+        QuantizeEntry::Simple { tensor_path } => {
+            let matrix = GraphMatrix::load(tensor_path)
+                .map_err(|e| anyhow::anyhow!("Failed to load {}: {}", job.source, e))?;
+
+            let (rows, cols) = matrix.shape();
+
+            let quant_data = quantize_to_gguf(&matrix, job.quant_type, scale_opt, None)
+                .map_err(|e| anyhow::anyhow!("Quantize failed for {}: {}", job.target, e))?;
+
+            Ok(ProcessedTensor {
+                target_name: job.target,
+                shape: (rows, cols),
+                quant_data,
+            })
+        }
+        QuantizeEntry::NdPlanes { original_shape, matrix_shape, plane_paths } => {
+            let (_rows, cols) = *matrix_shape;
+            let mut all_quant_data: Vec<u8> = Vec::new();
+
+            for (plane_idx, path) in plane_paths.iter().enumerate() {
+                let matrix = GraphMatrix::load(path)
+                    .map_err(|e| anyhow::anyhow!("Failed to load plane {} of {}: {}", plane_idx, job.source, e))?;
+
+                let plane_quant = quantize_to_gguf(&matrix, job.quant_type, scale_opt, None)
+                    .map_err(|e| anyhow::anyhow!("Quantize failed for plane {} of {}: {}", plane_idx, job.target, e))?;
+
+                all_quant_data.extend(plane_quant.data);
+            }
+
+            let total_elements: usize = original_shape.iter().product();
+            let combined_rows = total_elements / cols;
+
+            let quant_data = transform_storage::conversions::gguf_quant::GgufQuantizedData {
+                data: all_quant_data,
+                quant_type: job.quant_type,
+                shape: (combined_rows, cols),
+            };
+
+            Ok(ProcessedTensor {
+                target_name: job.target,
+                shape: (combined_rows, cols),
+                quant_data,
+            })
+        }
+    }
 }
 
 /// Run the export process with async pipeline.
@@ -410,52 +473,7 @@ async fn run_async(
         },
         // Worker: quantize tensor (runs on rayon)
         move |job: QuantizeJob| -> Result<ProcessedTensor> {
-            match &job.tensor_entry {
-                QuantizeEntry::Simple { tensor_path } => {
-                    let matrix = GraphMatrix::load(tensor_path)
-                        .map_err(|e| anyhow::anyhow!("Failed to load {}: {}", job.source, e))?;
-
-                    let (rows, cols) = matrix.shape();
-
-                    let quant_data = quantize_to_gguf(&matrix, job.quant_type, scale_opt, None)
-                        .map_err(|e| anyhow::anyhow!("Quantize failed for {}: {}", job.target, e))?;
-
-                    Ok(ProcessedTensor {
-                        target_name: job.target,
-                        shape: (rows, cols),
-                        quant_data,
-                    })
-                }
-                QuantizeEntry::NdPlanes { original_shape, matrix_shape, plane_paths } => {
-                    let (_rows, cols) = *matrix_shape;
-                    let mut all_quant_data: Vec<u8> = Vec::new();
-
-                    for (plane_idx, path) in plane_paths.iter().enumerate() {
-                        let matrix = GraphMatrix::load(path)
-                            .map_err(|e| anyhow::anyhow!("Failed to load plane {} of {}: {}", plane_idx, job.source, e))?;
-
-                        let plane_quant = quantize_to_gguf(&matrix, job.quant_type, scale_opt, None)
-                            .map_err(|e| anyhow::anyhow!("Quantize failed for plane {} of {}: {}", plane_idx, job.target, e))?;
-
-                        all_quant_data.extend(plane_quant.data);
-                    }
-
-                    let total_elements: usize = original_shape.iter().product();
-                    let combined_rows = total_elements / cols;
-
-                    let quant_data = transform_storage::conversions::gguf_quant::GgufQuantizedData {
-                        data: all_quant_data,
-                        quant_type: job.quant_type,
-                        shape: (combined_rows, cols),
-                    };
-
-                    Ok(ProcessedTensor {
-                        target_name: job.target,
-                        shape: (combined_rows, cols),
-                        quant_data,
-                    })
-                }
-            }
+            quantize_tensor_job(job, scale_opt)
         },
         // Writer: stream-write to GGUF
         move |mut rx: mpsc::Receiver<Result<ProcessedTensor>>, state: Arc<PipelineState>| async move {
