@@ -31,6 +31,7 @@ run:
 .PHONY: test
 test:
 	$(CARGO) test --manifest-path $(PROJECT_DIR)/Cargo.toml
+	$(CARGO) test --manifest-path gmat-cli/Cargo.toml
 	$(CARGO) test --manifest-path transform-storage/Cargo.toml
 
 # Run clippy lints
