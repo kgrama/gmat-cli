@@ -175,4 +175,4 @@ Like import, export uses streaming to minimize memory:
 - A bounded channel limits in-flight tensors
 - Results are written to GGUF incrementally
 
-See also: [[Configuration-Files#export-configuration]]
+See also: [Configuration Files](Configuration-Files.md#export-configuration)

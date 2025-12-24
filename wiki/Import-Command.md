@@ -130,4 +130,4 @@ The import process uses streaming to minimize memory usage:
 - **SafeTensors** (`.safetensors`) - Primary format, fully supported
 - Multi-file sharded SafeTensors models (automatically discovered)
 
-See also: [[Configuration-Files#import-configuration]]
+See also: [Configuration Files](Configuration-Files.md#import-configuration)

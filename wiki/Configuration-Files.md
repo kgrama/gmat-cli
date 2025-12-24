@@ -39,7 +39,7 @@ GMAT CLI uses JSON configuration files to control import and export operations.
 | Field | Type | Description |
 |-------|------|-------------|
 | `source_format` | string | Source format: `"safetensors"` or `"gguf"` |
-| `block_format` | string | Block format for storage (see [[Import-Command#block-formats]]) |
+| `block_format` | string | Block format for storage (see [Import Command](Import-Command.md#block-formats)) |
 | `tensor_map` | array | List of tensor mappings |
 | `metadata` | object | Model metadata to preserve |
 

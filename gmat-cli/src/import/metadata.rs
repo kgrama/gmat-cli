@@ -1,9 +1,10 @@
 //! Metadata extraction from SafeTensors and config.json files.
 
 use anyhow::{Context, Result};
+use memmap2::Mmap;
 use safetensors::SafeTensors;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
 use crate::config::import_config::ModelMetadata;
@@ -13,6 +14,8 @@ use crate::config::import_config::ModelMetadata;
 /// Tries multiple sources in order:
 /// 1. config.json in the same directory (HuggingFace format)
 /// 2. __metadata__ from safetensor header
+///
+/// Uses memory-mapped I/O to avoid loading entire files for metadata extraction.
 pub fn extract_model_metadata(safetensor_files: &[PathBuf]) -> Result<ModelMetadata> {
     // Try to find config.json in the parent directory of the first safetensor file
     if let Some(first_file) = safetensor_files.first() {
@@ -27,10 +30,13 @@ pub fn extract_model_metadata(safetensor_files: &[PathBuf]) -> Result<ModelMetad
         }
     }
 
-    // Try to extract from safetensor __metadata__
+    // Try to extract from safetensor __metadata__ using mmap
     for file_path in safetensor_files {
-        let data = fs::read(file_path)?;
-        let (_, st_metadata) = SafeTensors::read_metadata(&data)
+        let file = File::open(file_path)?;
+        let mmap = unsafe { Mmap::map(&file) }
+            .with_context(|| format!("Failed to mmap: {}", file_path.display()))?;
+
+        let (_, st_metadata) = SafeTensors::read_metadata(&mmap)
             .with_context(|| format!("Failed to read metadata from: {}", file_path.display()))?;
 
         if let Some(meta_map) = st_metadata.metadata() {

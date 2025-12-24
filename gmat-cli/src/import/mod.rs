@@ -4,10 +4,11 @@ mod metadata;
 mod streaming;
 
 use anyhow::{Context, Result};
+use memmap2::Mmap;
 use rayon::prelude::*;
 use safetensors::SafeTensors;
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
 use std::path::Path;
 use transform_storage::BlockFormat;
 use uuid::Uuid;
@@ -83,22 +84,29 @@ pub fn run(model_path: &str, config_path: Option<&str>, output_path: Option<&str
     Ok(())
 }
 
-/// Collect tensor mappings from safetensor files.
+/// Collect tensor mappings from safetensor files using memory-mapped I/O.
+///
+/// This only reads the safetensor header metadata, not the full tensor data,
+/// making it much faster for large model files.
 fn collect_tensor_mappings(safetensor_files: &[std::path::PathBuf]) -> Result<Vec<TensorMapping>> {
     safetensor_files
         .par_iter()
         .map(|file_path| -> Result<Vec<TensorMapping>> {
-            let data = fs::read(file_path)
-                .with_context(|| format!("Failed to read: {}", file_path.display()))?;
+            // Use memory-mapped I/O - only the header pages will be read from disk
+            let file = File::open(file_path)
+                .with_context(|| format!("Failed to open: {}", file_path.display()))?;
+            let mmap = unsafe { Mmap::map(&file) }
+                .with_context(|| format!("Failed to mmap: {}", file_path.display()))?;
 
-            let st = SafeTensors::deserialize(&data)
-                .with_context(|| format!("Failed to parse: {}", file_path.display()))?;
+            // read_metadata only parses the header, not tensor data
+            let (header_size, metadata) = SafeTensors::read_metadata(&mmap)
+                .with_context(|| format!("Failed to parse header: {}", file_path.display()))?;
 
-            let mappings: Vec<TensorMapping> = st
+            let mappings: Vec<TensorMapping> = metadata
                 .tensors()
-                .into_iter()
-                .map(|(name, tensor_view)| {
-                    println!("  - {} (shape: {:?})", name, tensor_view.shape());
+                .iter()
+                .map(|(name, info)| {
+                    println!("  - {} (shape: {:?})", name, info.shape);
                     TensorMapping {
                         source: name.to_string(),
                         target: Uuid::new_v4().to_string(),
@@ -106,6 +114,11 @@ fn collect_tensor_mappings(safetensor_files: &[std::path::PathBuf]) -> Result<Ve
                     }
                 })
                 .collect();
+
+            // Log header size for debugging large files
+            if header_size > 1_000_000 {
+                println!("  (header: {} KB)", header_size / 1024);
+            }
 
             Ok(mappings)
         })

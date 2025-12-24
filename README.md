@@ -1,8 +1,8 @@
 # GMAT-CLI
 
-**Model management infrastructure between training and inference.**
+**Model management infrastructure between training and inference. No GPU required.**
 
-Convert HuggingFace models to tensor-addressed GMAT format, then export to GGUF with fine-grained quantization control. Store once, deploy many ways.
+Convert HuggingFace models to tensor-addressed GMAT format, then export to GGUF with fine-grained quantization control. Store once, deploy many ways. Runs entirely on CPU with streaming processing—convert 70B+ models on any machine.
 
 ## The Problem
 
@@ -43,6 +43,7 @@ gmat export --model ./output/model.gmat --config export_config.json -o model-q4.
 
 | Feature | Benefit |
 |---------|---------|
+| **CPU-only** | No GPU needed—runs on any server or laptop |
 | Per-tensor quantization | Critical tensors stay high-precision |
 | Streaming processing | Handle models larger than RAM |
 | Auto-config generation | Extracts metadata from HuggingFace config.json |

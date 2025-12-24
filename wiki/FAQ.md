@@ -2,6 +2,17 @@
 
 Frequently asked questions about GMAT defaults, optimization options, and design decisions.
 
+## General
+
+### Does GMAT require a GPU?
+
+**No.** GMAT runs entirely on CPU. There are no CUDA, ROCm, or GPU dependencies. This means you can:
+- Convert models on any server or laptop
+- Run in CI/CD pipelines without GPU runners
+- Process 70B+ models with just CPU and sufficient disk space
+
+The streaming pipeline uses bounded memory, so even large models work without excessive RAM.
+
 ## Why These Defaults?
 
 ### Default Quantization: Q4_K_M
@@ -270,6 +281,6 @@ Small tensors (biases, layer norms) typically aren't quantized.
 
 ## See Also
 
-- [[Technical-Details]] - Block formats, encoding, compression
-- [[Configuration-Files]] - Full config reference
-- [[Export-Command]] - Export options and examples
+- [Technical Details](Technical-Details.md) - Block formats, encoding, compression
+- [Configuration Files](Configuration-Files.md) - Full config reference
+- [Export Command](Export-Command.md) - Export options and examples

@@ -1,8 +1,8 @@
 # GMAT CLI
 
-**Model management infrastructure between training and inference.**
+**Model management infrastructure between training and inference. No GPU required.**
 
-GMAT-CLI converts HuggingFace models (SafeTensors) to tensor-addressed GMAT format, then exports to production-ready GGUF with fine-grained quantization control.
+GMAT-CLI converts HuggingFace models (SafeTensors) to tensor-addressed GMAT format, then exports to production-ready GGUF with fine-grained quantization control. All processing runs on CPU with bounded memory usage—convert 70B+ models on any machine without specialized hardware.
 
 ## Why GMAT?
 
@@ -109,10 +109,11 @@ Regulated industries need reproducibility:
 
 ### Large Model Processing
 
-70B+ models don't fit in RAM:
-- Streaming producer-consumer pipeline
-- Process tensors one at a time
-- Parallel processing via Rayon
+70B+ models don't fit in RAM. GMAT handles this on CPU:
+- **No GPU required**—runs on any server or laptop
+- Streaming producer-consumer pipeline with bounded memory
+- Memory-mapped I/O avoids loading full files
+- Parallel processing via Rayon (scales with CPU cores)
 - Sharded output for deployment flexibility
 
 ## Quick Start
@@ -134,12 +135,12 @@ gmat export --model ./output/model.gmat --config export_config.json -o model.ggu
 
 ## Documentation
 
-- [[Installation]] - Build and install
-- [[Import-Command]] - SafeTensors to GMAT conversion
-- [[Export-Command]] - GMAT to GGUF with quantization
-- [[Configuration-Files]] - Config file reference
-- [[Technical-Details]] - Block formats, encoding, compression tradeoffs
-- [[FAQ]] - Defaults, trellis optimization, static saliency
+- [Installation](Installation.md) - Build and install
+- [Import Command](Import-Command.md) - SafeTensors to GMAT conversion
+- [Export Command](Export-Command.md) - GMAT to GGUF with quantization
+- [Configuration Files](Configuration-Files.md) - Config file reference
+- [Technical Details](Technical-Details.md) - Block formats, encoding, compression tradeoffs
+- [FAQ](FAQ.md) - Defaults, trellis optimization, static saliency
 
 ## Example
 

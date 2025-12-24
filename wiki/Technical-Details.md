@@ -1,6 +1,6 @@
 # Technical Details
 
-This page explains the internals of GMAT storage: block formats, encoding schemes, and the tradeoffs between accuracy, compression, and sparsity handling.
+This page explains the internals of GMAT storage: block formats, encoding schemes, and the tradeoffs between accuracy, compression, and sparsity handling. All operations run on CPU—no GPU required.
 
 ## GMAT Storage Architecture
 
@@ -186,23 +186,27 @@ Blocks are stored in row-major order. Empty blocks are stored inline (not skippe
 
 ## Performance Considerations
 
+All processing is CPU-only with no GPU dependencies.
+
 ### Encoding (Import)
 - O(n) scan for min magnitude (scale calculation)
 - O(n) offset computation
-- Parallelized across tensors via Rayon
+- Parallelized across CPU cores via Rayon
+- Memory-mapped I/O avoids loading full files
 
 ### Decoding (Export)
 - O(1) per element: `value = sign × 2^(scale + offset)`
 - Cache-friendly sequential access
-- Parallelized across tensors
+- Parallelized across CPU cores
 
 ### Memory Efficiency
 - Streaming pipeline: bounded buffer of tensors in flight
+- Backpressure prevents unbounded memory growth
 - Individual tensor files: only load what you need
 - Empty blocks: minimal memory footprint
 
 ## See Also
 
-- [[Import-Command]] - Block format selection during import
-- [[Export-Command]] - Quantization during export
-- [[Configuration-Files]] - Full configuration reference
+- [Import Command](Import-Command.md) - Block format selection during import
+- [Export Command](Export-Command.md) - Quantization during export
+- [Configuration Files](Configuration-Files.md) - Full configuration reference

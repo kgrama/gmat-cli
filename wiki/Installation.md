@@ -1,9 +1,12 @@
 # Installation
 
+GMAT-CLI is a pure CPU tool—no GPU, CUDA, or special drivers required. It runs on any machine with a Rust toolchain.
+
 ## Prerequisites
 
 - Rust toolchain (1.70 or later recommended)
 - Cargo package manager
+- No GPU required
 
 ## Building from Source
 
