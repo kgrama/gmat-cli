@@ -30,9 +30,8 @@ run:
 # Run tests for all workspace members
 .PHONY: test
 test:
-	$(CARGO) test --manifest-path $(PROJECT_DIR)/transform-storage/Cargo.toml
-	$(CARGO) test --manifest-path $(PROJECT_DIR)/gmat-cli/Cargo.toml
-	$(CARGO) test --manifest-path $(PROJECT_DIR)/Cargo.toml
+	$(CARGO) test --manifest-path transform-storage/Cargo.toml
+	$(CARGO) test --manifest-path gmat-cli/Cargo.toml
 
 # Run clippy lints
 .PHONY: lint
@@ -42,10 +41,9 @@ lint:
 
 # Check compilation without producing binaries
 .PHONY: check
-fmt:
-	$(CARGO) check --manifest-path $(PROJECT_DIR)/transform-storage/Cargo.toml --message-format=short
-	$(CARGO) check --manifest-path $(PROJECT_DIR)/gmat-cli/Cargo.toml --message-format=short
-
+check:
+	$(CARGO) check --manifest-path transform-storage/Cargo.toml --message-format=short
+	$(CARGO) check --manifest-path gmat-cli/Cargo.toml --message-format=short
 
 # Format code
 .PHONY: fmt
