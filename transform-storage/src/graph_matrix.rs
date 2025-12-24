@@ -23,6 +23,99 @@ pub struct GraphMatrix {
 }
 
 impl GraphMatrix {
+    // ========================================================================
+    // Block layout helpers
+    // ========================================================================
+
+    /// Calculate number of blocks per row (or per column for col-major).
+    #[inline]
+    fn blocks_per_row(&self) -> usize {
+        Self::calc_blocks_per_row(self.shape.1, self.format.block_size())
+    }
+
+    /// Static helper: calculate blocks per row given cols and block_size.
+    #[inline]
+    fn calc_blocks_per_row(cols: usize, block_size: usize) -> usize {
+        (cols + block_size - 1) / block_size
+    }
+
+    /// Calculate the block offset for a given row in row_blocks.
+    #[inline]
+    fn row_block_offset(&self, row: usize) -> usize {
+        let blocks_per_row = self.blocks_per_row();
+        if self.format.is_dual_row() {
+            (row / 2) * blocks_per_row
+        } else {
+            row * blocks_per_row
+        }
+    }
+
+    /// For dual-row formats, get which sub-row (0 or 1) within the block.
+    #[inline]
+    fn row_in_block(&self, row: usize) -> usize {
+        if self.format.is_dual_row() { row % 2 } else { 0 }
+    }
+
+    /// Calculate expected block count for given shape and format.
+    fn expected_block_count(rows: usize, cols: usize, format: &BlockFormat) -> usize {
+        let block_size = format.block_size();
+        let blocks_per_row = Self::calc_blocks_per_row(cols, block_size);
+        if format.is_dual_row() {
+            let row_pairs = (rows + 1) / 2;
+            row_pairs * blocks_per_row
+        } else {
+            rows * blocks_per_row
+        }
+    }
+
+    // ========================================================================
+    // Encoding helpers
+    // ========================================================================
+
+    /// Encode a single-row block using the given format.
+    fn encode_single_row_block(format: BlockFormat, data: &[f32]) -> AnyBlock {
+        match format {
+            BlockFormat::B8x4 => AnyBlock::encode_8x4(data),
+            BlockFormat::B8x8 => AnyBlock::encode_8x8(data),
+            BlockFormat::B16x4 => AnyBlock::encode_16x4(data),
+            BlockFormat::B16x8 => AnyBlock::encode_16x8(data),
+            _ => unreachable!("encode_single_row_block called with dual-row format"),
+        }
+    }
+
+    /// Encode a dual-row block using the given format.
+    fn encode_dual_row_block(format: BlockFormat, row0: &[f32], row1: &[f32]) -> AnyBlock {
+        match format {
+            BlockFormat::DualRow8x4 => AnyBlock::encode_dualrow_8x4(row0, row1),
+            BlockFormat::DualRow8x8 => AnyBlock::encode_dualrow_8x8(row0, row1),
+            BlockFormat::DualRow16x4 => AnyBlock::encode_dualrow_16x4(row0, row1),
+            BlockFormat::DualRow16x8 => AnyBlock::encode_dualrow_16x8(row0, row1),
+            _ => unreachable!("encode_dual_row_block called with single-row format"),
+        }
+    }
+
+    /// Copy a row segment into a buffer, zero-padding as needed.
+    #[inline]
+    fn copy_row_segment(
+        data: &[f32],
+        row: usize,
+        cols: usize,
+        block_col_start: usize,
+        block_len: usize,
+        buffer: &mut [f32],
+    ) {
+        buffer.fill(0.0);
+        if row * cols < data.len() {
+            let data_start = row * cols + block_col_start;
+            let data_end = data_start + block_len;
+            buffer[..block_len].copy_from_slice(&data[data_start..data_end]);
+        }
+    }
+
+    // ========================================================================
+    // Constructors
+    // ========================================================================
+
     /// Create GraphMatrix from pre-encoded blocks with validation.
     ///
     /// # Arguments
@@ -34,26 +127,15 @@ impl GraphMatrix {
     /// Panics if block count doesn't match expected
     pub fn from_blocks(row_blocks: Vec<AnyBlock>, shape: (usize, usize), format: BlockFormat) -> Self {
         let (rows, cols) = shape;
-        let block_size = format.block_size();
-        
-        let expected_blocks = if format.is_dual_row() {
-            // For dual-row: each block covers 2 rows
-            let rows_in_blocks = (rows + 1) / 2; // ceil division
-            let blocks_per_row_pair = (cols + block_size - 1) / block_size;
-            rows_in_blocks * blocks_per_row_pair
-        } else {
-            // For single-row: each block covers 1 row
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            rows * blocks_per_row
-        };
-        
+        let expected_blocks = Self::expected_block_count(rows, cols, &format);
+
         assert_eq!(
             row_blocks.len(),
             expected_blocks,
             "Block count mismatch: expected {} blocks for {}x{} matrix with format {:?}, got {}",
             expected_blocks, rows, cols, format, row_blocks.len()
         );
-        
+
         Self {
             row_blocks,
             col_blocks: None,
@@ -85,78 +167,42 @@ impl GraphMatrix {
         );
 
         let block_size = format.block_size();
-        let mut row_blocks = Vec::new();
+        let blocks_per_row = Self::calc_blocks_per_row(cols, block_size);
+        let expected_blocks = Self::expected_block_count(rows, cols, &format);
+        let mut row_blocks = Vec::with_capacity(expected_blocks);
 
-        // Stack-allocated buffer reused across all blocks (max block size is 16)
-        let mut block_data = [0.0f32; 16];
-        let mut block_data2 = [0.0f32; 16];
+        // Stack-allocated buffers reused across all blocks (max block size is 16)
+        let mut buf0 = [0.0f32; 16];
+        let mut buf1 = [0.0f32; 16];
 
         if format.is_dual_row() {
-            // Process 2 rows at a time
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            let row_pairs = (rows + 1) / 2; // ceil division
-            
+            let row_pairs = (rows + 1) / 2;
             for row_pair in 0..row_pairs {
                 let row0 = row_pair * 2;
                 let row1 = row0 + 1;
-                
+
                 for block_idx in 0..blocks_per_row {
                     let block_col_start = block_idx * block_size;
-                    let block_col_end = (block_col_start + block_size).min(cols);
-                    let block_len = block_col_end - block_col_start;
-                    
-                    // Prepare row 0 data
-                    block_data[..block_size].fill(0.0);
-                    if row0 < rows {
-                        let data_start = row0 * cols + block_col_start;
-                        let data_end = row0 * cols + block_col_end;
-                        block_data[..block_len].copy_from_slice(&data[data_start..data_end]);
-                    }
-                    
-                    // Prepare row 1 data (pad with zeros if no row1)
-                    block_data2[..block_size].fill(0.0);
+                    let block_len = (block_col_start + block_size).min(cols) - block_col_start;
+
+                    Self::copy_row_segment(data, row0, cols, block_col_start, block_len, &mut buf0[..block_size]);
                     if row1 < rows {
-                        let data_start = row1 * cols + block_col_start;
-                        let data_end = row1 * cols + block_col_end;
-                        block_data2[..block_len].copy_from_slice(&data[data_start..data_end]);
+                        Self::copy_row_segment(data, row1, cols, block_col_start, block_len, &mut buf1[..block_size]);
+                    } else {
+                        buf1[..block_size].fill(0.0);
                     }
-                    
-                    // Encode dual-row block
-                    let block = match format {
-                        BlockFormat::DualRow8x4 => AnyBlock::encode_dualrow_8x4(&block_data[..8], &block_data2[..8]),
-                        BlockFormat::DualRow8x8 => AnyBlock::encode_dualrow_8x8(&block_data[..8], &block_data2[..8]),
-                        BlockFormat::DualRow16x4 => AnyBlock::encode_dualrow_16x4(&block_data[..16], &block_data2[..16]),
-                        BlockFormat::DualRow16x8 => AnyBlock::encode_dualrow_16x8(&block_data[..16], &block_data2[..16]),
-                        _ => unreachable!("is_dual_row() returned true but format is not dual-row"),
-                    };
-                    row_blocks.push(block);
+
+                    row_blocks.push(Self::encode_dual_row_block(format, &buf0[..block_size], &buf1[..block_size]));
                 }
             }
         } else {
-            // Single-row format: process 1 row at a time
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            
             for row in 0..rows {
-                let row_start = row * cols;
-                
                 for block_idx in 0..blocks_per_row {
-                    let block_start = row_start + block_idx * block_size;
-                    let block_end = (block_start + block_size).min(row_start + cols);
-                    let block_len = block_end - block_start;
-                    
-                    // Zero the buffer and copy data
-                    block_data[..block_size].fill(0.0);
-                    block_data[..block_len].copy_from_slice(&data[block_start..block_end]);
-                    
-                    // Encode single-row block
-                    let block = match format {
-                        BlockFormat::B8x4 => AnyBlock::encode_8x4(&block_data[..8]),
-                        BlockFormat::B8x8 => AnyBlock::encode_8x8(&block_data[..8]),
-                        BlockFormat::B16x4 => AnyBlock::encode_16x4(&block_data[..16]),
-                        BlockFormat::B16x8 => AnyBlock::encode_16x8(&block_data[..16]),
-                        _ => unreachable!("is_dual_row() returned false but format is dual-row"),
-                    };
-                    row_blocks.push(block);
+                    let block_col_start = block_idx * block_size;
+                    let block_len = (block_col_start + block_size).min(cols) - block_col_start;
+
+                    Self::copy_row_segment(data, row, cols, block_col_start, block_len, &mut buf0[..block_size]);
+                    row_blocks.push(Self::encode_single_row_block(format, &buf0[..block_size]));
                 }
             }
         }
@@ -256,64 +302,14 @@ impl GraphMatrix {
     pub fn to_tensor(&self, device: &Device) -> Result<Tensor> {
         let (rows, cols) = self.shape;
         let mut data = Vec::with_capacity(rows * cols);
-        
-        let block_size = self.format.block_size();
-        
-        if self.format.is_dual_row() {
-            // Dual-row: each block contains 2 rows
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            let row_pairs = (rows + 1) / 2;
-            
-            for row_pair in 0..row_pairs {
-                let row0 = row_pair * 2;
-                let row1 = row0 + 1;
-                let block_offset = row_pair * blocks_per_row;
-                
-                // Decode row 0
-                if row0 < rows {
-                    for block_idx in 0..blocks_per_row {
-                        let block = &self.row_blocks[block_offset + block_idx];
-                        let block_start_col = block_idx * block_size;
-                        let block_end_col = (block_start_col + block_size).min(cols);
-                        
-                        for col_idx in 0..(block_end_col - block_start_col) {
-                            data.push(block.decode_row(0, col_idx));
-                        }
-                    }
-                }
-                
-                // Decode row 1
-                if row1 < rows {
-                    for block_idx in 0..blocks_per_row {
-                        let block = &self.row_blocks[block_offset + block_idx];
-                        let block_start_col = block_idx * block_size;
-                        let block_end_col = (block_start_col + block_size).min(cols);
-                        
-                        for col_idx in 0..(block_end_col - block_start_col) {
-                            data.push(block.decode_row(1, col_idx));
-                        }
-                    }
-                }
-            }
-        } else {
-            // Single-row: each block contains 1 row
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            
-            for row in 0..rows {
-                let row_offset = row * blocks_per_row;
-                
-                for block_idx in 0..blocks_per_row {
-                    let block = &self.row_blocks[row_offset + block_idx];
-                    let block_start_col = block_idx * block_size;
-                    let block_end_col = (block_start_col + block_size).min(cols);
-                    
-                    for col_idx in 0..(block_end_col - block_start_col) {
-                        data.push(block.decode(col_idx));
-                    }
-                }
-            }
+        let mut row_buffer = vec![0.0f32; cols];
+
+        for row in 0..rows {
+            row_buffer.fill(0.0);
+            self.decode_row_to_buffer(row, &mut row_buffer);
+            data.extend_from_slice(&row_buffer);
         }
-        
+
         Tensor::from_vec(data, (rows, cols), device)
     }
 
@@ -356,74 +352,73 @@ impl GraphMatrix {
         crate::conversions::CooMatrix::new(values, row_indices, col_indices, self.shape)
     }
 
-    /// Export to log-sparse COO format.
-    /// Note: Only works for single-row formats (not DualRow).
-    pub fn to_log_sparse(&self) -> crate::conversions::LogSparseMatrix {
+    /// Helper: iterate over log-sparse entries, calling visitor for each (row, col, log_mag, sign).
+    fn for_each_log_entry<F>(&self, mut visitor: F)
+    where
+        F: FnMut(usize, usize, f32, u8),
+    {
         let (rows, cols) = self.shape;
         let block_size = self.format.block_size();
-        let blocks_per_row = (cols + block_size - 1) / block_size;
+        let blocks_per_row = self.blocks_per_row();
+
+        for row in 0..rows {
+            let row_offset = self.row_block_offset(row);
+
+            for block_idx in 0..blocks_per_row {
+                let block = &self.row_blocks[row_offset + block_idx];
+                let block_col_start = block_idx * block_size;
+                for (local_idx, log_mag, sign) in block.log_iter() {
+                    let col = block_col_start + local_idx;
+                    if col < cols {
+                        visitor(row, col, log_mag, sign);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Export to log-sparse COO format.
+    pub fn to_log_sparse(&self) -> crate::conversions::LogSparseMatrix {
         let mut log2_values = Vec::new();
         let mut signs = Vec::new();
         let mut row_indices = Vec::new();
         let mut col_indices = Vec::new();
-        
-        for row in 0..rows {
-            let row_offset = if self.format.is_dual_row() {
-                (row / 2) * blocks_per_row
-            } else {
-                row * blocks_per_row
-            };
-            
-            for block_idx in 0..blocks_per_row {
-                let block = &self.row_blocks[row_offset + block_idx];
-                let block_col_start = block_idx * block_size;
-                for (local_idx, log_mag, sign) in block.log_iter() {
-                    let col = block_col_start + local_idx;
-                    if col < cols {
-                        row_indices.push(row);
-                        col_indices.push(col);
-                        log2_values.push(log_mag);
-                        signs.push(sign);
-                    }
-                }
-            }
-        }
+
+        self.for_each_log_entry(|row, col, log_mag, sign| {
+            row_indices.push(row);
+            col_indices.push(col);
+            log2_values.push(log_mag);
+            signs.push(sign);
+        });
+
         crate::conversions::LogSparseMatrix::new(log2_values, signs, row_indices, col_indices, self.shape)
     }
 
     /// Export to log-sparse CSR format.
-    /// Note: Only works for single-row formats (not DualRow).
     pub fn to_log_sparse_csr(&self) -> crate::conversions::LogSparseCsrMatrix {
-        let (rows, cols) = self.shape;
-        let block_size = self.format.block_size();
-        let blocks_per_row = (cols + block_size - 1) / block_size;
+        let (rows, _) = self.shape;
         let mut log2_values = Vec::new();
         let mut signs = Vec::new();
         let mut col_indices = Vec::new();
-        let mut row_ptr = Vec::with_capacity(rows + 1);
-        row_ptr.push(0);
-        
-        for row in 0..rows {
-            let row_offset = if self.format.is_dual_row() {
-                (row / 2) * blocks_per_row
-            } else {
-                row * blocks_per_row
-            };
-            
-            for block_idx in 0..blocks_per_row {
-                let block = &self.row_blocks[row_offset + block_idx];
-                let block_col_start = block_idx * block_size;
-                for (local_idx, log_mag, sign) in block.log_iter() {
-                    let col = block_col_start + local_idx;
-                    if col < cols {
-                        col_indices.push(col);
-                        log2_values.push(log_mag);
-                        signs.push(sign);
-                    }
-                }
+        let mut row_ptr = vec![0usize; rows + 1];
+        let mut current_row = 0;
+
+        self.for_each_log_entry(|row, col, log_mag, sign| {
+            // Fill in row_ptr for any skipped rows
+            while current_row < row {
+                current_row += 1;
+                row_ptr[current_row] = log2_values.len();
             }
-            row_ptr.push(log2_values.len());
+            col_indices.push(col);
+            log2_values.push(log_mag);
+            signs.push(sign);
+        });
+
+        // Fill remaining row_ptr entries
+        for i in (current_row + 1)..=rows {
+            row_ptr[i] = log2_values.len();
         }
+
         crate::conversions::LogSparseCsrMatrix::new(log2_values, signs, col_indices, row_ptr, self.shape)
     }
 
@@ -453,59 +448,42 @@ impl GraphMatrix {
             return (0.0, 0.0, 0);
         }
 
-        // Compute median (geometric median in log space)
-        log2_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mid = log2_vals.len() / 2;
-        let log2_center = if log2_vals.len() % 2 == 0 {
-            (log2_vals[mid - 1] + log2_vals[mid]) / 2.0
-        } else {
-            log2_vals[mid]
-        };
-
+        let log2_center = Self::compute_median(&mut log2_vals);
         let log2_range = max_log - min_log;
         (log2_center, log2_range, log2_vals.len())
     }
 
     /// Compute log2 center (geometric median) for a specific row.
     pub fn row_log2_center(&self, row: usize) -> f32 {
-        let (rows, cols) = self.shape;
+        let rows = self.shape.0;
         assert!(row < rows);
 
-        let block_size = self.format.block_size();
-        let blocks_per_row = (cols + block_size - 1) / block_size;
+        let blocks_per_row = self.blocks_per_row();
+        let block_offset = self.row_block_offset(row);
+        let row_in_block = self.row_in_block(row);
         let mut log2_vals = Vec::new();
 
-        if self.format.is_dual_row() {
-            let row_pair = row / 2;
-            let row_in_block = row % 2;
-            let block_offset = row_pair * blocks_per_row;
-
-            for block_idx in 0..blocks_per_row {
-                let block = &self.row_blocks[block_offset + block_idx];
-                for (_, log_mag, _) in block.log_row_iter(row_in_block) {
-                    log2_vals.push(log_mag);
-                }
-            }
-        } else {
-            let row_offset = row * blocks_per_row;
-            for block_idx in 0..blocks_per_row {
-                let block = &self.row_blocks[row_offset + block_idx];
-                for (_, log_mag, _) in block.log_iter() {
-                    log2_vals.push(log_mag);
-                }
+        for block_idx in 0..blocks_per_row {
+            let block = &self.row_blocks[block_offset + block_idx];
+            for (_, log_mag, _) in block.log_row_iter(row_in_block) {
+                log2_vals.push(log_mag);
             }
         }
 
-        if log2_vals.is_empty() {
+        Self::compute_median(&mut log2_vals)
+    }
+
+    /// Compute median of a float slice (returns 0.0 for empty).
+    fn compute_median(values: &mut [f32]) -> f32 {
+        if values.is_empty() {
             return 0.0;
         }
-
-        log2_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mid = log2_vals.len() / 2;
-        if log2_vals.len() % 2 == 0 {
-            (log2_vals[mid - 1] + log2_vals[mid]) / 2.0
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = values.len() / 2;
+        if values.len() % 2 == 0 {
+            (values[mid - 1] + values[mid]) / 2.0
         } else {
-            log2_vals[mid]
+            values[mid]
         }
     }
 
@@ -519,7 +497,7 @@ impl GraphMatrix {
             .expect("Column index not built. Call build_col_index() first.");
 
         let block_size = self.format.block_size();
-        let blocks_per_col = (rows + block_size - 1) / block_size;
+        let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
         let col_offset = col * blocks_per_col;
         let mut log2_vals = Vec::new();
 
@@ -530,17 +508,7 @@ impl GraphMatrix {
             }
         }
 
-        if log2_vals.is_empty() {
-            return 0.0;
-        }
-
-        log2_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mid = log2_vals.len() / 2;
-        if log2_vals.len() % 2 == 0 {
-            (log2_vals[mid - 1] + log2_vals[mid]) / 2.0
-        } else {
-            log2_vals[mid]
-        }
+        Self::compute_median(&mut log2_vals)
     }
 
     /// Iterate over non-zero elements in a specific row.
@@ -620,12 +588,12 @@ impl GraphMatrix {
     pub fn col_iter(&self, col: usize) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
         let (rows, cols) = self.shape;
         assert!(col < cols, "Column index {} out of bounds for matrix with {} columns", col, cols);
-        
+
         let col_blocks = self.col_blocks.as_ref()
             .expect("Column index not built. Call build_col_index() first.");
-        
+
         let block_size = self.format.block_size();
-        let blocks_per_col = (rows + block_size - 1) / block_size;
+        let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
         let col_offset = col * blocks_per_col;
         
         Box::new((0..blocks_per_col)
@@ -644,14 +612,39 @@ impl GraphMatrix {
             }))
     }
 
+    /// Helper: decode a row from blocks into a buffer.
+    fn decode_row_to_buffer(&self, row: usize, buffer: &mut [f32]) {
+        let cols = self.shape.1;
+        let block_size = self.format.block_size();
+        let blocks_per_row = self.blocks_per_row();
+        let block_offset = self.row_block_offset(row);
+        let block_row = self.row_in_block(row);
+
+        for block_idx in 0..blocks_per_row {
+            let block = &self.row_blocks[block_offset + block_idx];
+            let block_start = block_idx * block_size;
+            let block_end = (block_start + block_size).min(cols);
+
+            for local_idx in 0..(block_end - block_start) {
+                buffer[block_start + local_idx] = block.decode_row(block_row, local_idx);
+            }
+        }
+    }
+
+    /// Helper: encode a slice into a block using the matrix's format.
+    fn encode_block(&self, data: &[f32]) -> AnyBlock {
+        match self.format {
+            BlockFormat::B8x4 | BlockFormat::DualRow8x4 => AnyBlock::encode_8x4(data),
+            BlockFormat::B8x8 | BlockFormat::DualRow8x8 => AnyBlock::encode_8x8(data),
+            BlockFormat::B16x4 | BlockFormat::DualRow16x4 => AnyBlock::encode_16x4(data),
+            BlockFormat::B16x8 | BlockFormat::DualRow16x8 => AnyBlock::encode_16x8(data),
+        }
+    }
+
     /// Build column index for fast column access.
     ///
-    /// Transposes row_blocks into col_blocks by:
-    /// 1. Decoding all row blocks into a flat column-major buffer
-    /// 2. Encoding each column into blocks of block_size elements
-    /// 3. Storing result in col_blocks field
-    ///
-    /// This enables efficient column iteration via col_iter().
+    /// Transposes row_blocks into col_blocks by decoding to column-major format
+    /// and re-encoding. Enables efficient column iteration via col_iter().
     pub fn build_col_index(&mut self) {
         let (rows, cols) = self.shape;
         if rows == 0 || cols == 0 {
@@ -660,69 +653,21 @@ impl GraphMatrix {
         }
 
         let block_size = self.format.block_size();
-        let blocks_per_col = (rows + block_size - 1) / block_size;
+        let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
 
-        // Single flat buffer for column-major data
+        // Decode to column-major buffer
         let mut col_major = vec![0.0f32; rows * cols];
+        let mut row_buffer = vec![0.0f32; cols];
 
-        // Decode all blocks into column-major buffer
-        if self.format.is_dual_row() {
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            let row_pairs = (rows + 1) / 2;
-            
-            for row_pair in 0..row_pairs {
-                let row0 = row_pair * 2;
-                let row1 = row0 + 1;
-                let block_offset = row_pair * blocks_per_row;
-                
-                // Decode row 0
-                if row0 < rows {
-                    for block_idx in 0..blocks_per_row {
-                        let block = &self.row_blocks[block_offset + block_idx];
-                        let block_start_col = block_idx * block_size;
-                        let block_end_col = (block_start_col + block_size).min(cols);
-                        
-                        for local_idx in 0..(block_end_col - block_start_col) {
-                            let col = block_start_col + local_idx;
-                            col_major[col * rows + row0] = block.decode_row(0, local_idx);
-                        }
-                    }
-                }
-                
-                // Decode row 1
-                if row1 < rows {
-                    for block_idx in 0..blocks_per_row {
-                        let block = &self.row_blocks[block_offset + block_idx];
-                        let block_start_col = block_idx * block_size;
-                        let block_end_col = (block_start_col + block_size).min(cols);
-                        
-                        for local_idx in 0..(block_end_col - block_start_col) {
-                            let col = block_start_col + local_idx;
-                            col_major[col * rows + row1] = block.decode_row(1, local_idx);
-                        }
-                    }
-                }
-            }
-        } else {
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            
-            for row in 0..rows {
-                let row_offset = row * blocks_per_row;
-                
-                for block_idx in 0..blocks_per_row {
-                    let block = &self.row_blocks[row_offset + block_idx];
-                    let block_start_col = block_idx * block_size;
-                    let block_end_col = (block_start_col + block_size).min(cols);
-                    
-                    for local_idx in 0..(block_end_col - block_start_col) {
-                        let col = block_start_col + local_idx;
-                        col_major[col * rows + row] = block.decode(local_idx);
-                    }
-                }
+        for row in 0..rows {
+            row_buffer.fill(0.0);
+            self.decode_row_to_buffer(row, &mut row_buffer);
+            for col in 0..cols {
+                col_major[col * rows + row] = row_buffer[col];
             }
         }
 
-        // Encode columns into blocks (always single-row blocks for column storage)
+        // Encode columns into blocks
         let mut encoded_col_blocks = Vec::with_capacity(cols * blocks_per_col);
         let mut block_data = [0.0f32; 16];
 
@@ -732,19 +677,12 @@ impl GraphMatrix {
             for block_idx in 0..blocks_per_col {
                 let block_start = block_idx * block_size;
                 let block_end = (block_start + block_size).min(rows);
-                let block_len = block_end - block_start;
 
                 block_data[..block_size].fill(0.0);
-                block_data[..block_len].copy_from_slice(&col_major[col_start + block_start..col_start + block_end]);
+                block_data[..(block_end - block_start)]
+                    .copy_from_slice(&col_major[col_start + block_start..col_start + block_end]);
 
-                // Use same format as row blocks for column blocks
-                let block = match self.format {
-                    BlockFormat::B8x4 | BlockFormat::DualRow8x4 => AnyBlock::encode_8x4(&block_data[..block_size]),
-                    BlockFormat::B8x8 | BlockFormat::DualRow8x8 => AnyBlock::encode_8x8(&block_data[..block_size]),
-                    BlockFormat::B16x4 | BlockFormat::DualRow16x4 => AnyBlock::encode_16x4(&block_data[..block_size]),
-                    BlockFormat::B16x8 | BlockFormat::DualRow16x8 => AnyBlock::encode_16x8(&block_data[..block_size]),
-                };
-                encoded_col_blocks.push(block);
+                encoded_col_blocks.push(self.encode_block(&block_data[..block_size]));
             }
         }
 
@@ -833,29 +771,20 @@ impl GraphMatrix {
     /// - Header is invalid
     pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
         use crate::formats::GmatHeader;
-        
+
         let mut file = std::fs::File::open(path)?;
-        
+
         let header = GmatHeader::read_from(&mut file)?;
         let format = BlockFormat::try_from(header.format)?;
-        
+
         let (rows, cols) = header.shape();
-        let block_size = format.block_size();
-        
-        let expected_blocks = if format.is_dual_row() {
-            let rows_in_blocks = (rows + 1) / 2;
-            let blocks_per_row_pair = (cols + block_size - 1) / block_size;
-            rows_in_blocks * blocks_per_row_pair
-        } else {
-            let blocks_per_row = (cols + block_size - 1) / block_size;
-            rows * blocks_per_row
-        };
-        
+        let expected_blocks = Self::expected_block_count(rows, cols, &format);
+
         let mut row_blocks = Vec::with_capacity(expected_blocks);
         for _ in 0..expected_blocks {
             row_blocks.push(AnyBlock::read_from(format, &mut file)?);
         }
-        
+
         Ok(Self {
             row_blocks,
             col_blocks: None,
@@ -863,596 +792,5 @@ impl GraphMatrix {
             format,
             metadata: header.metadata().cloned(),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::NamedTempFile;
-
-    // ========================================================================
-    // from_dense tests
-    // ========================================================================
-
-    #[test]
-    fn test_from_dense_basic() {
-        let data = vec![
-            1.0, 0.0, 2.0, 0.0,
-            0.0, 3.0, 0.0, 4.0,
-        ];
-        let matrix = GraphMatrix::from_dense(&data, (2, 4), BlockFormat::B16x8);
-
-        assert_eq!(matrix.shape(), (2, 4));
-        assert_eq!(matrix.nnz(), 4);
-    }
-
-    #[test]
-    fn test_from_dense_all_zeros() {
-        let data = vec![0.0f32; 64];
-        let matrix = GraphMatrix::from_dense(&data, (4, 16), BlockFormat::B16x8);
-
-        assert_eq!(matrix.shape(), (4, 16));
-        assert_eq!(matrix.nnz(), 0);
-        assert_eq!(matrix.density(), 0.0);
-    }
-
-    #[test]
-    fn test_from_dense_all_nonzero() {
-        let data: Vec<f32> = (1..=32).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        assert_eq!(matrix.shape(), (2, 16));
-        assert_eq!(matrix.nnz(), 32);
-        assert_eq!(matrix.density(), 1.0);
-    }
-
-    #[test]
-    fn test_from_dense_partial_blocks() {
-        // 20 columns = 2 full blocks (16) + partial block (4)
-        let data = vec![1.0f32; 20];
-        let matrix = GraphMatrix::from_dense(&data, (1, 20), BlockFormat::B16x8);
-
-        assert_eq!(matrix.shape(), (1, 20));
-        assert_eq!(matrix.nnz(), 20);
-    }
-
-    #[test]
-    #[should_panic(expected = "Data length")]
-    fn test_from_dense_mismatched_length() {
-        let data = vec![1.0f32; 10];
-        let _matrix = GraphMatrix::from_dense(&data, (2, 8), BlockFormat::B16x8);
-    }
-
-    // ========================================================================
-    // from_blocks tests
-    // ========================================================================
-
-    #[test]
-    fn test_from_blocks_valid() {
-        let blocks = vec![
-            AnyBlock::encode_16x8(&[1.0; 16]),
-            AnyBlock::encode_16x8(&[2.0; 16]),
-        ];
-        let matrix = GraphMatrix::from_blocks(blocks, (2, 16), BlockFormat::B16x8);
-
-        assert_eq!(matrix.shape(), (2, 16));
-    }
-
-    #[test]
-    #[should_panic(expected = "Block count mismatch")]
-    fn test_from_blocks_wrong_count() {
-        let blocks = vec![AnyBlock::encode_16x8(&[1.0; 16])];
-        let _matrix = GraphMatrix::from_blocks(blocks, (2, 16), BlockFormat::B16x8); // expects 2 blocks
-    }
-
-    // ========================================================================
-    // nnz and density tests
-    // ========================================================================
-
-    #[test]
-    fn test_nnz_sparse() {
-        let mut data = vec![0.0f32; 32];
-        data[0] = 1.0;
-        data[15] = 2.0;
-        data[16] = 3.0;
-        data[31] = 4.0;
-
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-        assert_eq!(matrix.nnz(), 4);
-    }
-
-    #[test]
-    fn test_density_half() {
-        let mut data = vec![0.0f32; 16];
-        for i in 0..8 {
-            data[i] = (i + 1) as f32;
-        }
-
-        let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
-        assert_eq!(matrix.density(), 0.5);
-    }
-
-    #[test]
-    fn test_density_empty_matrix() {
-        let matrix = GraphMatrix::from_dense(&[], (0, 0), BlockFormat::B16x8);
-        assert_eq!(matrix.density(), 0.0);
-    }
-
-    // ========================================================================
-    // row_iter tests
-    // ========================================================================
-
-    #[test]
-    fn test_row_iter_basic() {
-        let mut data = vec![0.0f32; 32];
-        data[0] = 1.0;   // row 0, col 0
-        data[5] = 2.0;   // row 0, col 5
-        data[16] = 3.0;  // row 1, col 0
-        data[20] = 4.0;  // row 1, col 4
-
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        // Check row 0
-        let row0: Vec<(usize, f32)> = matrix.row_iter(0).collect();
-        assert_eq!(row0.len(), 2);
-        assert_eq!(row0[0].0, 0); // column index
-        assert_eq!(row0[1].0, 5); // column index
-
-        // Check row 1
-        let row1: Vec<(usize, f32)> = matrix.row_iter(1).collect();
-        assert_eq!(row1.len(), 2);
-        assert_eq!(row1[0].0, 0);
-        assert_eq!(row1[1].0, 4);
-    }
-
-    #[test]
-    fn test_row_iter_empty_row() {
-        let mut data = vec![0.0f32; 32];
-        data[0] = 1.0; // only row 0 has data
-
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        let row1: Vec<_> = matrix.row_iter(1).collect();
-        assert!(row1.is_empty());
-    }
-
-    #[test]
-    fn test_row_iter_partial_block() {
-        // 20 columns = 2 blocks, but second block only has 4 valid elements
-        let mut data = vec![0.0f32; 20];
-        data[18] = 5.0; // col 18 in partial block
-
-        let matrix = GraphMatrix::from_dense(&data, (1, 20), BlockFormat::B16x8);
-
-        let row: Vec<_> = matrix.row_iter(0).collect();
-        assert_eq!(row.len(), 1);
-        assert_eq!(row[0].0, 18);
-    }
-
-    #[test]
-    #[should_panic(expected = "out of bounds")]
-    fn test_row_iter_out_of_bounds() {
-        let data = vec![1.0f32; 16];
-        let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
-        let _: Vec<_> = matrix.row_iter(1).collect(); // row 1 doesn't exist
-    }
-
-    // ========================================================================
-    // block_iter tests
-    // ========================================================================
-
-    #[test]
-    fn test_block_iter() {
-        let data = vec![1.0f32; 48]; // 3 rows x 16 cols = 3 blocks
-        let matrix = GraphMatrix::from_dense(&data, (3, 16), BlockFormat::B16x8);
-
-        let blocks: Vec<_> = matrix.block_iter().collect();
-        assert_eq!(blocks.len(), 3);
-    }
-
-    // ========================================================================
-    // col_iter and col_index tests
-    // ========================================================================
-
-    #[test]
-    fn test_col_index_not_built() {
-        let data = vec![1.0f32; 16];
-        let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
-
-        assert!(!matrix.has_col_index());
-    }
-
-    #[test]
-    fn test_build_col_index() {
-        let data = vec![1.0f32; 32];
-        let mut matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        assert!(!matrix.has_col_index());
-        matrix.build_col_index();
-        assert!(matrix.has_col_index());
-    }
-
-    #[test]
-    fn test_col_iter_basic() {
-        let mut data = vec![0.0f32; 32];
-        data[0] = 1.0;   // row 0, col 0
-        data[16] = 2.0;  // row 1, col 0
-        data[5] = 3.0;   // row 0, col 5
-
-        let mut matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-        matrix.build_col_index();
-
-        // Check col 0
-        let col0: Vec<(usize, f32)> = matrix.col_iter(0).collect();
-        assert_eq!(col0.len(), 2);
-
-        // Check col 5
-        let col5: Vec<(usize, f32)> = matrix.col_iter(5).collect();
-        assert_eq!(col5.len(), 1);
-        assert_eq!(col5[0].0, 0); // row index
-    }
-
-    #[test]
-    fn test_drop_col_index() {
-        let data = vec![1.0f32; 32];
-        let mut matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        matrix.build_col_index();
-        assert!(matrix.has_col_index());
-
-        matrix.drop_col_index();
-        assert!(!matrix.has_col_index());
-    }
-
-    #[test]
-    #[should_panic(expected = "Column index not built")]
-    fn test_col_iter_without_index() {
-        let data = vec![1.0f32; 16];
-        let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
-        let _: Vec<_> = matrix.col_iter(0).collect();
-    }
-
-    // ========================================================================
-    // memory_bytes tests
-    // ========================================================================
-
-    #[test]
-    fn test_memory_bytes_empty_blocks() {
-        let data = vec![0.0f32; 32];
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        // 2 empty blocks = 2 * 2 bytes = 4 bytes + vec overhead
-        let mem = matrix.memory_bytes();
-        assert!(mem >= 4);
-    }
-
-    #[test]
-    fn test_memory_bytes_nonempty_blocks() {
-        // Use varied values to avoid scale_log = 0 (which equals EMPTY_SCALE)
-        let data: Vec<f32> = (1..=32).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        // 2 non-empty Block16x8 = 2 * 22 bytes = 44 bytes + vec overhead
-        let mem = matrix.memory_bytes();
-        assert!(mem >= 44, "Expected >= 44 bytes, got {}", mem);
-    }
-
-    #[test]
-    fn test_memory_bytes_with_col_index() {
-        let data = vec![1.0f32; 32];
-        let mut matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        let mem_before = matrix.memory_bytes();
-        matrix.build_col_index();
-        let mem_after = matrix.memory_bytes();
-
-        assert!(mem_after > mem_before);
-    }
-
-    // ========================================================================
-    // save/load tests
-    // ========================================================================
-
-    #[test]
-    fn test_save_load_roundtrip_block16x8() {
-        let data: Vec<f32> = (1..=32).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        let temp_file = NamedTempFile::new().unwrap();
-        matrix.save(temp_file.path()).unwrap();
-
-        let loaded = GraphMatrix::load(temp_file.path()).unwrap();
-
-        assert_eq!(matrix.shape(), loaded.shape());
-        assert_eq!(matrix.nnz(), loaded.nnz());
-    }
-
-    #[test]
-    fn test_save_load_roundtrip_block16x4() {
-        let data: Vec<f32> = (1..=32).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x4);
-
-        let temp_file = NamedTempFile::new().unwrap();
-        matrix.save(temp_file.path()).unwrap();
-
-        let loaded = GraphMatrix::load(temp_file.path()).unwrap();
-
-        assert_eq!(matrix.shape(), loaded.shape());
-        assert_eq!(matrix.nnz(), loaded.nnz());
-    }
-
-    #[test]
-    fn test_save_load_roundtrip_block8x4() {
-        let data: Vec<f32> = (1..=16).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (2, 8), BlockFormat::B8x4);
-
-        let temp_file = NamedTempFile::new().unwrap();
-        matrix.save(temp_file.path()).unwrap();
-
-        let loaded = GraphMatrix::load(temp_file.path()).unwrap();
-
-        assert_eq!(matrix.shape(), loaded.shape());
-        assert_eq!(matrix.nnz(), loaded.nnz());
-    }
-
-    #[test]
-    fn test_save_load_empty_blocks() {
-        let data = vec![0.0f32; 32];
-        let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
-
-        let temp_file = NamedTempFile::new().unwrap();
-        matrix.save(temp_file.path()).unwrap();
-
-        let loaded = GraphMatrix::load(temp_file.path()).unwrap();
-
-        assert_eq!(loaded.nnz(), 0);
-    }
-
-    #[test]
-    fn test_save_load_sparse_data() {
-        let mut data = vec![0.0f32; 64];
-        data[0] = 1.0;
-        data[15] = 2.0;
-        data[32] = 3.0;
-        data[63] = 4.0;
-
-        let matrix = GraphMatrix::from_dense(&data, (4, 16), BlockFormat::B16x8);
-
-        let temp_file = NamedTempFile::new().unwrap();
-        matrix.save(temp_file.path()).unwrap();
-
-        let loaded = GraphMatrix::load(temp_file.path()).unwrap();
-
-        assert_eq!(matrix.nnz(), loaded.nnz());
-        assert_eq!(loaded.nnz(), 4);
-    }
-
-    // ========================================================================
-    // Tensor conversion tests
-    // ========================================================================
-
-    #[test]
-    fn test_tensor_roundtrip() {
-        let device = Device::Cpu;
-        // e1m7 has 4 octave range, can handle simple linear values
-        let original_data: Vec<f32> = (1..=32).map(|x| x as f32).collect();
-
-        let original = Tensor::from_vec(original_data.clone(), (4, 8), &device).unwrap();
-
-        let matrix = GraphMatrix::from_tensor(&original, BlockFormat::B8x8).unwrap();
-        let restored = matrix.to_tensor(&device).unwrap();
-
-        assert_eq!(restored.dims(), &[4, 8]);
-
-        // Values should be approximately equal (quantization error)
-        let restored_data: Vec<f32> = restored.flatten_all().unwrap().to_vec1().unwrap();
-        for (orig, rest) in original_data.iter().zip(restored_data.iter()) {
-            if *orig == 0.0 {
-                assert_eq!(*rest, 0.0);
-            } else {
-                let ratio = rest / orig;
-                // e1m7 has ~4 octave range, expect ratio within 0.9-1.1
-                assert!(
-                    (0.9..1.1).contains(&ratio),
-                    "orig={}, restored={}", orig, rest
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_from_tensor_shape() {
-        let device = Device::Cpu;
-        let tensor = Tensor::zeros((4, 20), candle_core::DType::F32, &device).unwrap();
-
-        let matrix = GraphMatrix::from_tensor(&tensor, BlockFormat::B16x8).unwrap();
-        assert_eq!(matrix.shape(), (4, 20));
-    }
-
-    // ========================================================================
-    // Different block type tests
-    // ========================================================================
-
-    #[test]
-    fn test_block8x4_matrix() {
-        let data: Vec<f32> = (1..=24).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (3, 8), BlockFormat::B8x4);
-
-        assert_eq!(matrix.shape(), (3, 8));
-        assert_eq!(matrix.nnz(), 24);
-    }
-
-    #[test]
-    fn test_block16x4_matrix() {
-        let data: Vec<f32> = (1..=48).map(|x| x as f32).collect();
-        let matrix = GraphMatrix::from_dense(&data, (3, 16), BlockFormat::B16x4);
-
-        assert_eq!(matrix.shape(), (3, 16));
-        assert_eq!(matrix.nnz(), 48);
-    }
-
-    // ========================================================================
-    // Log-sparse reconstruction error tests
-    // ========================================================================
-
-    /// Compute relative reconstruction error: |original - reconstructed| / |original|
-    fn relative_error(original: f32, reconstructed: f32) -> f32 {
-        if original == 0.0 {
-            if reconstructed == 0.0 { 0.0 } else { f32::INFINITY }
-        } else {
-            (original - reconstructed).abs() / original.abs()
-        }
-    }
-
-    #[test]
-    fn test_log_sparse_reconstruction_error_block8x8() {
-        // Use two Block8x8 blocks for 16 values - each block handles narrower range
-        // Values 2-16 span too many octaves for single block's offset range from median
-        let data: [f32; 16] = [
-            2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0, -9.0,
-            10.0, -11.0, 12.0, -14.0, 16.0, 0.0, 0.0, 0.0,
-        ];
-
-        // Split into two matrices with Block8x8
-        let matrix1 = GraphMatrix::from_dense(&data[0..8], (1, 8), BlockFormat::B8x8);
-        let matrix2 = GraphMatrix::from_dense(&data[8..16], (1, 8), BlockFormat::B8x8);
-
-        let log_sparse1 = matrix1.to_log_sparse();
-        let log_sparse2 = matrix2.to_log_sparse();
-        let linear1 = log_sparse1.to_linear();
-        let linear2 = log_sparse2.to_linear();
-
-        let mut max_error: f32 = 0.0;
-        let mut sum_error: f32 = 0.0;
-        let mut count = 0;
-
-        // Check first block
-        for (&orig, &recon) in data[0..8].iter().zip(linear1.values.iter()) {
-            if orig != 0.0 {
-                assert_eq!(orig.signum(), recon.signum(),
-                    "Sign mismatch: original={}, reconstructed={}", orig, recon);
-                let err = relative_error(orig, recon);
-                max_error = max_error.max(err);
-                sum_error += err;
-                count += 1;
-            }
-        }
-
-        // Check second block
-        for (&orig, &recon) in data[8..16].iter().zip(linear2.values.iter()) {
-            if orig != 0.0 {
-                assert_eq!(orig.signum(), recon.signum(),
-                    "Sign mismatch: original={}, reconstructed={}", orig, recon);
-                let err = relative_error(orig, recon);
-                max_error = max_error.max(err);
-                sum_error += err;
-                count += 1;
-            }
-        }
-
-        let avg_error = sum_error / count as f32;
-
-        // e1m7 (8-bit) should have < 2% average error for values within each block's range
-        println!("Block8x8 (e1m7): avg_error={:.4}%, max_error={:.4}%",
-            avg_error * 100.0, max_error * 100.0);
-        assert!(avg_error < 0.03, "Average error {:.4}% exceeds 3%", avg_error * 100.0);
-        assert!(max_error < 0.08, "Max error {:.4}% exceeds 8%", max_error * 100.0);
-    }
-
-    #[test]
-    fn test_log_sparse_reconstruction_error_block16x4() {
-        // e0m4 encodes offsets in [0.0, 1.0) from median, so ~1 octave range
-        // Using values from 8.0 to 12.0 (factor 1.5 = 0.58 octaves)
-        let data: [f32; 16] = [
-            8.0, -8.5, 9.0, -9.5, 10.0, -10.5, 11.0, -11.5,
-            12.0, -8.2, 9.2, -10.2, 11.2, 0.0, 0.0, 0.0,
-        ];
-
-        let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x4);
-        let log_sparse = matrix.to_log_sparse();
-        let linear = log_sparse.to_linear();
-
-        let mut max_error: f32 = 0.0;
-        let mut sum_error: f32 = 0.0;
-        let mut count = 0;
-
-        for (&orig, &recon) in data.iter().zip(linear.values.iter()) {
-            if orig != 0.0 {
-                assert_eq!(orig.signum(), recon.signum(),
-                    "Sign mismatch: original={}, reconstructed={}", orig, recon);
-
-                let err = relative_error(orig, recon);
-                max_error = max_error.max(err);
-                sum_error += err;
-                count += 1;
-            }
-        }
-
-        let avg_error = sum_error / count as f32;
-
-        // e0m4 (4-bit) has lower precision, expect < 10% average error
-        println!("Block16x4 (e0m4): avg_error={:.4}%, max_error={:.4}%",
-            avg_error * 100.0, max_error * 100.0);
-        assert!(avg_error < 0.15, "Average error {:.4}% exceeds 15%", avg_error * 100.0);
-        assert!(max_error < 0.30, "Max error {:.4}% exceeds 30%", max_error * 100.0);
-    }
-
-    #[test]
-    fn test_log_sparse_reconstruction_error_block8x4() {
-        // e0m4 encodes offsets in [0.0, 1.0) from median, so ~1 octave range
-        // Using values from 8.0 to 11.0 (factor 1.375 = 0.46 octaves)
-        let data: [f32; 8] = [8.0, -8.5, 9.0, -9.5, 10.0, -10.5, 11.0, -8.2];
-
-        let matrix = GraphMatrix::from_dense(&data, (1, 8), BlockFormat::B8x4);
-        let log_sparse = matrix.to_log_sparse();
-        let linear = log_sparse.to_linear();
-
-        let mut max_error: f32 = 0.0;
-        let mut sum_error: f32 = 0.0;
-        let mut count = 0;
-
-        for (&orig, &recon) in data.iter().zip(linear.values.iter()) {
-            if orig != 0.0 {
-                assert_eq!(orig.signum(), recon.signum(),
-                    "Sign mismatch: original={}, reconstructed={}", orig, recon);
-
-                let err = relative_error(orig, recon);
-                max_error = max_error.max(err);
-                sum_error += err;
-                count += 1;
-            }
-        }
-
-        let avg_error = sum_error / count as f32;
-
-        // e0m4 (4-bit) has lower precision
-        println!("Block8x4 (e0m4): avg_error={:.4}%, max_error={:.4}%",
-            avg_error * 100.0, max_error * 100.0);
-        assert!(avg_error < 0.15, "Average error {:.4}% exceeds 15%", avg_error * 100.0);
-        assert!(max_error < 0.30, "Max error {:.4}% exceeds 30%", max_error * 100.0);
-    }
-
-    #[test]
-    fn test_log_sparse_csr_matches_coo() {
-        // Verify CSR and COO produce same results
-        let data: [f32; 16] = [
-            4.0, -5.0, 6.0, -7.0, 8.0, -9.0, 10.0, -11.0,
-            12.0, -13.0, 14.0, -15.0, 16.0, 0.0, 0.0, 0.0,
-        ];
-
-        let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
-
-        let log_coo = matrix.to_log_sparse();
-        let log_csr = matrix.to_log_sparse_csr();
-
-        let linear_coo = log_coo.to_linear();
-        let linear_csr = log_csr.to_linear();
-
-        assert_eq!(linear_coo.values.len(), linear_csr.values.len());
-        for (coo_val, csr_val) in linear_coo.values.iter().zip(linear_csr.values.iter()) {
-            assert!((coo_val - csr_val).abs() < 1e-6,
-                "COO={} vs CSR={}", coo_val, csr_val);
-        }
     }
 }

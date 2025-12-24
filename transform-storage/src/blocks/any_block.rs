@@ -2,8 +2,36 @@
 
 use half::f16;
 use std::io::{Read, Write, Result};
-use super::configs::{Config8x4, Config8x8, Config16x4, Config16x8};
-use super::unified_block::UnifiedBlock;
+use super::configs::{BlockConfig, Config8x4, Config8x8, Config16x4, Config16x8};
+use super::unified_block::{EncodeHelper, UnifiedBlock};
+
+/// Internal trait for unified block operations across all configurations.
+/// This enables generic functions to work with any UnifiedBlock variant.
+pub(crate) trait UnifiedBlockOps {
+    fn scale_log(&self) -> f16;
+    fn decode_element(&self, row: usize, idx: usize) -> f32;
+    fn row_nnz(&self, row: usize) -> usize;
+    fn is_empty(&self) -> bool;
+    fn byte_size(&self) -> usize;
+    fn has_element_at(&self, row: usize, idx: usize) -> bool;
+    fn sign_at(&self, row: usize, idx: usize) -> bool;
+}
+
+impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlockOps for UnifiedBlock<ROWS, C> {
+    fn scale_log(&self) -> f16 { self.scale_log }
+    fn decode_element(&self, row: usize, idx: usize) -> f32 { UnifiedBlock::decode_element(self, row, idx) }
+    fn row_nnz(&self, row: usize) -> usize { UnifiedBlock::row_nnz(self, row) }
+    fn is_empty(&self) -> bool { UnifiedBlock::is_empty(self) }
+    fn byte_size(&self) -> usize { UnifiedBlock::byte_size(self) }
+    fn has_element_at(&self, row: usize, idx: usize) -> bool {
+        let mask: u64 = self.zero_map[row].into();
+        (mask >> idx) & 1 == 1
+    }
+    fn sign_at(&self, row: usize, idx: usize) -> bool {
+        let mask: u64 = self.signs[row].into();
+        (mask >> idx) & 1 == 1
+    }
+}
 
 /// Block format identifier for serialization/construction
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -83,40 +111,31 @@ pub enum AnyBlock {
     DualRow16x8(UnifiedBlock<2, Config16x8>),
 }
 
-/// Helper macro to reduce match arm duplication
-macro_rules! any_block_dispatch {
-    ($self:expr, $method:ident $(, $args:expr)*) => {
-        match $self {
-            AnyBlock::B8x4(b) => b.$method($($args),*),
-            AnyBlock::B8x8(b) => b.$method($($args),*),
-            AnyBlock::B16x4(b) => b.$method($($args),*),
-            AnyBlock::B16x8(b) => b.$method($($args),*),
-            AnyBlock::DualRow8x4(b) => b.$method($($args),*),
-            AnyBlock::DualRow8x8(b) => b.$method($($args),*),
-            AnyBlock::DualRow16x4(b) => b.$method($($args),*),
-            AnyBlock::DualRow16x8(b) => b.$method($($args),*),
-        }
-    };
-}
-
 impl AnyBlock {
+    /// Get a reference to the inner block as a trait object
+    fn inner(&self) -> &dyn UnifiedBlockOps {
+        match self {
+            Self::B8x4(b) => b,
+            Self::B8x8(b) => b,
+            Self::B16x4(b) => b,
+            Self::B16x8(b) => b,
+            Self::DualRow8x4(b) => b,
+            Self::DualRow8x8(b) => b,
+            Self::DualRow16x4(b) => b,
+            Self::DualRow16x8(b) => b,
+        }
+    }
+
     /// Get the block size (number of elements per row)
     pub fn size(&self) -> usize {
-        match self {
-            Self::B8x4(_) | Self::B8x8(_) => 8,
-            Self::B16x4(_) | Self::B16x8(_) => 16,
-            Self::DualRow8x4(_) | Self::DualRow8x8(_) => 8,
-            Self::DualRow16x4(_) | Self::DualRow16x8(_) => 16,
-        }
+        self.format().block_size()
     }
 
     /// Get the encoding bits (4 or 8)
     pub fn bits(&self) -> u8 {
         match self {
-            Self::B8x4(_) | Self::B16x4(_) => 4,
-            Self::B8x8(_) | Self::B16x8(_) => 8,
-            Self::DualRow8x4(_) | Self::DualRow16x4(_) => 4,
-            Self::DualRow8x8(_) | Self::DualRow16x8(_) => 8,
+            Self::B8x4(_) | Self::B16x4(_) | Self::DualRow8x4(_) | Self::DualRow16x4(_) => 4,
+            Self::B8x8(_) | Self::B16x8(_) | Self::DualRow8x8(_) | Self::DualRow16x8(_) => 8,
         }
     }
 
@@ -177,136 +196,68 @@ impl AnyBlock {
     /// Decode a single element
     /// Note: For DualRow variants, decodes from row 0.
     pub fn decode(&self, idx: usize) -> f32 {
-        any_block_dispatch!(self, decode_element, 0, idx)
+        self.inner().decode_element(0, idx)
     }
 
     /// Decode element from specific row (for DualRow support)
     /// For single-row blocks, row must be 0
     /// For dual-row blocks, row can be 0 or 1
     pub fn decode_row(&self, row: usize, idx: usize) -> f32 {
-        match self {
-            Self::B8x4(_) | Self::B8x8(_) | Self::B16x4(_) | Self::B16x8(_) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                self.decode(idx)
-            }
-            Self::DualRow8x4(_) | Self::DualRow8x8(_) | Self::DualRow16x4(_) | Self::DualRow16x8(_) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                any_block_dispatch!(self, decode_element, row, idx)
-            }
-        }
+        let max_row = if self.format().is_dual_row() { 2 } else { 1 };
+        assert!(row < max_row, "Row {} out of bounds for block with {} rows", row, max_row);
+        self.inner().decode_element(row, idx)
     }
 
     /// Number of non-zero elements
     pub fn nnz(&self) -> usize {
-        match self {
-            Self::B8x4(b) => b.row_nnz(0),
-            Self::B8x8(b) => b.row_nnz(0),
-            Self::B16x4(b) => b.row_nnz(0),
-            Self::B16x8(b) => b.row_nnz(0),
-            Self::DualRow8x4(b) => b.row_nnz(0) + b.row_nnz(1),
-            Self::DualRow8x8(b) => b.row_nnz(0) + b.row_nnz(1),
-            Self::DualRow16x4(b) => b.row_nnz(0) + b.row_nnz(1),
-            Self::DualRow16x8(b) => b.row_nnz(0) + b.row_nnz(1),
+        let inner = self.inner();
+        if self.format().is_dual_row() {
+            inner.row_nnz(0) + inner.row_nnz(1)
+        } else {
+            inner.row_nnz(0)
         }
     }
 
     /// Check if element exists
     /// Note: For DualRow variants, checks row 0 only.
     pub fn has_element(&self, idx: usize) -> bool {
-        match self {
-            Self::B8x4(b) => {
-                if idx >= 8 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::B8x8(b) => {
-                if idx >= 8 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::B16x4(b) => {
-                if idx >= 16 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::B16x8(b) => {
-                if idx >= 16 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::DualRow8x4(b) => {
-                if idx >= 8 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::DualRow8x8(b) => {
-                if idx >= 8 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::DualRow16x4(b) => {
-                if idx >= 16 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-            Self::DualRow16x8(b) => {
-                if idx >= 16 { return false; }
-                (b.zero_map[0] >> idx) & 1 == 1
-            }
-        }
+        if idx >= self.size() { return false; }
+        self.inner().has_element_at(0, idx)
     }
 
     /// Get sign of element
     /// Note: For DualRow variants, checks row 0 only.
     pub fn sign(&self, idx: usize) -> bool {
-        match self {
-            Self::B8x4(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::B8x8(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::B16x4(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::B16x8(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::DualRow8x4(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::DualRow8x8(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::DualRow16x4(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-            Self::DualRow16x8(b) => {
-                (b.signs[0] >> idx) & 1 == 1
-            }
-        }
+        self.inner().sign_at(0, idx)
     }
 
     /// Check if block is empty
     pub fn is_empty(&self) -> bool {
-        any_block_dispatch!(self, is_empty)
+        self.inner().is_empty()
     }
 
     /// Get byte size
     pub fn byte_size(&self) -> usize {
-        any_block_dispatch!(self, byte_size)
+        self.inner().byte_size()
     }
 
     /// Get scale log
     pub fn scale_log(&self) -> f16 {
-        match self {
-            Self::B8x4(b) => b.scale_log,
-            Self::B8x8(b) => b.scale_log,
-            Self::B16x4(b) => b.scale_log,
-            Self::B16x8(b) => b.scale_log,
-            Self::DualRow8x4(b) => b.scale_log,
-            Self::DualRow8x8(b) => b.scale_log,
-            Self::DualRow16x4(b) => b.scale_log,
-            Self::DualRow16x8(b) => b.scale_log,
-        }
+        self.inner().scale_log()
     }
 
     /// Write to output
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<()> {
-        any_block_dispatch!(self, write_to, w)
+        match self {
+            Self::B8x4(b) => b.write_to(w),
+            Self::B8x8(b) => b.write_to(w),
+            Self::B16x4(b) => b.write_to(w),
+            Self::B16x8(b) => b.write_to(w),
+            Self::DualRow8x4(b) => b.write_to(w),
+            Self::DualRow8x8(b) => b.write_to(w),
+            Self::DualRow16x4(b) => b.write_to(w),
+            Self::DualRow16x8(b) => b.write_to(w),
+        }
     }
 
     /// Read from input with known format
@@ -333,39 +284,17 @@ impl AnyBlock {
     /// For single-row blocks, row must be 0
     /// For dual-row blocks, row can be 0 or 1
     pub fn row_iter(&self, row: usize) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
+        let max_row = if self.format().is_dual_row() { 2 } else { 1 };
+        assert!(row < max_row, "Row {} out of bounds for block with {} rows", row, max_row);
         match self {
-            Self::B8x4(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.row_iter(0))
-            }
-            Self::B8x8(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.row_iter(0))
-            }
-            Self::B16x4(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.row_iter(0))
-            }
-            Self::B16x8(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.row_iter(0))
-            }
-            Self::DualRow8x4(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.row_iter(row))
-            }
-            Self::DualRow8x8(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.row_iter(row))
-            }
-            Self::DualRow16x4(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.row_iter(row))
-            }
-            Self::DualRow16x8(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.row_iter(row))
-            }
+            Self::B8x4(b) => Box::new(b.row_iter(row)),
+            Self::B8x8(b) => Box::new(b.row_iter(row)),
+            Self::B16x4(b) => Box::new(b.row_iter(row)),
+            Self::B16x8(b) => Box::new(b.row_iter(row)),
+            Self::DualRow8x4(b) => Box::new(b.row_iter(row)),
+            Self::DualRow8x8(b) => Box::new(b.row_iter(row)),
+            Self::DualRow16x4(b) => Box::new(b.row_iter(row)),
+            Self::DualRow16x8(b) => Box::new(b.row_iter(row)),
         }
     }
 
@@ -373,39 +302,17 @@ impl AnyBlock {
     /// For single-row blocks, row must be 0
     /// For dual-row blocks, row can be 0 or 1
     pub fn log_row_iter(&self, row: usize) -> Box<dyn Iterator<Item = (usize, f32, u8)> + '_> {
+        let max_row = if self.format().is_dual_row() { 2 } else { 1 };
+        assert!(row < max_row, "Row {} out of bounds for block with {} rows", row, max_row);
         match self {
-            Self::B8x4(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.log_row_iter(0))
-            }
-            Self::B8x8(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.log_row_iter(0))
-            }
-            Self::B16x4(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.log_row_iter(0))
-            }
-            Self::B16x8(b) => {
-                assert_eq!(row, 0, "Single-row block only supports row 0");
-                Box::new(b.log_row_iter(0))
-            }
-            Self::DualRow8x4(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.log_row_iter(row))
-            }
-            Self::DualRow8x8(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.log_row_iter(row))
-            }
-            Self::DualRow16x4(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.log_row_iter(row))
-            }
-            Self::DualRow16x8(b) => {
-                assert!(row < 2, "DualRow block only supports rows 0 and 1");
-                Box::new(b.log_row_iter(row))
-            }
+            Self::B8x4(b) => Box::new(b.log_row_iter(row)),
+            Self::B8x8(b) => Box::new(b.log_row_iter(row)),
+            Self::B16x4(b) => Box::new(b.log_row_iter(row)),
+            Self::B16x8(b) => Box::new(b.log_row_iter(row)),
+            Self::DualRow8x4(b) => Box::new(b.log_row_iter(row)),
+            Self::DualRow8x8(b) => Box::new(b.log_row_iter(row)),
+            Self::DualRow16x4(b) => Box::new(b.log_row_iter(row)),
+            Self::DualRow16x8(b) => Box::new(b.log_row_iter(row)),
         }
     }
 

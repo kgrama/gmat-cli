@@ -31,6 +31,9 @@ pub mod conversions;
 pub mod formats;
 pub mod graph_matrix;
 
+#[cfg(test)]
+mod graph_matrix_tests;
+
 // Re-exports
 pub use block::Block;
 pub use blocks::{Block16x8, Block16x4, Block8x8, Block8x4, BlockFormat};
