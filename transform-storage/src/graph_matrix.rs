@@ -3,6 +3,7 @@
 use crate::blocks::{AnyBlock, BlockFormat};
 use candle_core::{Device, Tensor, Result};
 use crate::formats::GmatMetadata;
+use rayon::prelude::*;
 
 /// Block-based sparse matrix with optional column index.
 ///
@@ -94,7 +95,7 @@ impl GraphMatrix {
         }
     }
 
-    /// Copy a row segment into a buffer, zero-padding as needed.
+    /// Copy a row segment into a buffer, zero-padding only the tail if needed.
     #[inline]
     fn copy_row_segment(
         data: &[f32],
@@ -104,11 +105,16 @@ impl GraphMatrix {
         block_len: usize,
         buffer: &mut [f32],
     ) {
-        buffer.fill(0.0);
         if row * cols < data.len() {
             let data_start = row * cols + block_col_start;
             let data_end = data_start + block_len;
             buffer[..block_len].copy_from_slice(&data[data_start..data_end]);
+            // Only zero-pad the tail if block_len < buffer.len()
+            if block_len < buffer.len() {
+                buffer[block_len..].fill(0.0);
+            }
+        } else {
+            buffer.fill(0.0);
         }
     }
 
@@ -149,6 +155,7 @@ impl GraphMatrix {
     ///
     /// Chunks data into blocks, encoding each block according to format.
     /// Partial blocks at row/column ends are padded with zeros.
+    /// Uses parallel encoding via rayon for better performance on large matrices.
     ///
     /// # Arguments
     /// - `data`: Dense row-major f32 data (length must be rows * cols)
@@ -168,44 +175,48 @@ impl GraphMatrix {
 
         let block_size = format.block_size();
         let blocks_per_row = Self::calc_blocks_per_row(cols, block_size);
-        let expected_blocks = Self::expected_block_count(rows, cols, &format);
-        let mut row_blocks = Vec::with_capacity(expected_blocks);
 
-        // Stack-allocated buffers reused across all blocks (max block size is 16)
-        let mut buf0 = [0.0f32; 16];
-        let mut buf1 = [0.0f32; 16];
-
-        if format.is_dual_row() {
+        let row_blocks = if format.is_dual_row() {
             let row_pairs = (rows + 1) / 2;
-            for row_pair in 0..row_pairs {
-                let row0 = row_pair * 2;
-                let row1 = row0 + 1;
+            (0..row_pairs)
+                .into_par_iter()
+                .flat_map(|row_pair| {
+                    let row0 = row_pair * 2;
+                    let row1 = row0 + 1;
 
-                for block_idx in 0..blocks_per_row {
-                    let block_col_start = block_idx * block_size;
-                    let block_len = (block_col_start + block_size).min(cols) - block_col_start;
+                    (0..blocks_per_row).map(move |block_idx| {
+                        let block_col_start = block_idx * block_size;
+                        let block_len = (block_col_start + block_size).min(cols) - block_col_start;
 
-                    Self::copy_row_segment(data, row0, cols, block_col_start, block_len, &mut buf0[..block_size]);
-                    if row1 < rows {
-                        Self::copy_row_segment(data, row1, cols, block_col_start, block_len, &mut buf1[..block_size]);
-                    } else {
-                        buf1[..block_size].fill(0.0);
-                    }
+                        let mut buf0 = [0.0f32; 16];
+                        let mut buf1 = [0.0f32; 16];
 
-                    row_blocks.push(Self::encode_dual_row_block(format, &buf0[..block_size], &buf1[..block_size]));
-                }
-            }
+                        Self::copy_row_segment(data, row0, cols, block_col_start, block_len, &mut buf0[..block_size]);
+                        if row1 < rows {
+                            Self::copy_row_segment(data, row1, cols, block_col_start, block_len, &mut buf1[..block_size]);
+                        } else {
+                            buf1[..block_size].fill(0.0);
+                        }
+
+                        Self::encode_dual_row_block(format, &buf0[..block_size], &buf1[..block_size])
+                    }).collect::<Vec<_>>()
+                })
+                .collect()
         } else {
-            for row in 0..rows {
-                for block_idx in 0..blocks_per_row {
-                    let block_col_start = block_idx * block_size;
-                    let block_len = (block_col_start + block_size).min(cols) - block_col_start;
+            (0..rows)
+                .into_par_iter()
+                .flat_map(|row| {
+                    (0..blocks_per_row).map(move |block_idx| {
+                        let block_col_start = block_idx * block_size;
+                        let block_len = (block_col_start + block_size).min(cols) - block_col_start;
 
-                    Self::copy_row_segment(data, row, cols, block_col_start, block_len, &mut buf0[..block_size]);
-                    row_blocks.push(Self::encode_single_row_block(format, &buf0[..block_size]));
-                }
-            }
-        }
+                        let mut buf = [0.0f32; 16];
+                        Self::copy_row_segment(data, row, cols, block_col_start, block_len, &mut buf[..block_size]);
+                        Self::encode_single_row_block(format, &buf[..block_size])
+                    }).collect::<Vec<_>>()
+                })
+                .collect()
+        };
 
         Self {
             row_blocks,
@@ -302,10 +313,11 @@ impl GraphMatrix {
     pub fn to_tensor(&self, device: &Device) -> Result<Tensor> {
         let (rows, cols) = self.shape;
         let mut data = Vec::with_capacity(rows * cols);
+        // Buffer is zero-initialized and decode_row_to_buffer overwrites all values
         let mut row_buffer = vec![0.0f32; cols];
 
         for row in 0..rows {
-            row_buffer.fill(0.0);
+            // Note: decode_row_to_buffer sets all values, so no fill(0.0) needed
             self.decode_row_to_buffer(row, &mut row_buffer);
             data.extend_from_slice(&row_buffer);
         }
@@ -322,8 +334,10 @@ impl GraphMatrix {
     /// Export to CSR format.
     pub fn to_csr(&self) -> crate::conversions::CsrMatrix {
         let (rows, _cols) = self.shape;
-        let mut values = Vec::new();
-        let mut col_indices = Vec::new();
+        // Pre-allocate based on nnz
+        let nnz = self.nnz();
+        let mut values = Vec::with_capacity(nnz);
+        let mut col_indices = Vec::with_capacity(nnz);
         let mut row_ptr = Vec::with_capacity(rows + 1);
         row_ptr.push(0);
         for row in 0..rows {
@@ -339,9 +353,11 @@ impl GraphMatrix {
     /// Export to COO format.
     pub fn to_coo(&self) -> crate::conversions::CooMatrix {
         let (rows, _cols) = self.shape;
-        let mut values = Vec::new();
-        let mut row_indices = Vec::new();
-        let mut col_indices = Vec::new();
+        // Pre-allocate based on nnz
+        let nnz = self.nnz();
+        let mut values = Vec::with_capacity(nnz);
+        let mut row_indices = Vec::with_capacity(nnz);
+        let mut col_indices = Vec::with_capacity(nnz);
         for row in 0..rows {
             for (col, value) in self.row_iter(row) {
                 row_indices.push(row);
@@ -432,7 +448,9 @@ impl GraphMatrix {
     /// - log2_range: max_log2 - min_log2
     /// - nnz: number of non-zero elements
     pub fn log2_stats(&self) -> (f32, f32, usize) {
-        let mut log2_vals = Vec::new();
+        // Pre-allocate based on total nnz estimate
+        let estimated_nnz = self.nnz();
+        let mut log2_vals = Vec::with_capacity(estimated_nnz);
         let mut min_log = f32::INFINITY;
         let mut max_log = f32::NEG_INFINITY;
 
@@ -461,7 +479,9 @@ impl GraphMatrix {
         let blocks_per_row = self.blocks_per_row();
         let block_offset = self.row_block_offset(row);
         let row_in_block = self.row_in_block(row);
-        let mut log2_vals = Vec::new();
+        // Pre-allocate for estimated nnz per row (cols / sparsity estimate, capped at cols)
+        let cols = self.shape.1;
+        let mut log2_vals = Vec::with_capacity(cols);
 
         for block_idx in 0..blocks_per_row {
             let block = &self.row_blocks[block_offset + block_idx];
@@ -499,7 +519,8 @@ impl GraphMatrix {
         let block_size = self.format.block_size();
         let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
         let col_offset = col * blocks_per_col;
-        let mut log2_vals = Vec::new();
+        // Pre-allocate for estimated nnz per column (capped at rows)
+        let mut log2_vals = Vec::with_capacity(rows);
 
         for block_idx in 0..blocks_per_col {
             let block = &col_blocks[col_offset + block_idx];
@@ -643,8 +664,8 @@ impl GraphMatrix {
 
     /// Build column index for fast column access.
     ///
-    /// Transposes row_blocks into col_blocks by decoding to column-major format
-    /// and re-encoding. Enables efficient column iteration via col_iter().
+    /// Transposes row_blocks into col_blocks by encoding columns directly
+    /// without allocating a full matrix buffer. Enables efficient column iteration via col_iter().
     pub fn build_col_index(&mut self) {
         let (rows, cols) = self.shape;
         if rows == 0 || cols == 0 {
@@ -655,32 +676,36 @@ impl GraphMatrix {
         let block_size = self.format.block_size();
         let blocks_per_col = Self::calc_blocks_per_row(rows, block_size);
 
-        // Decode to column-major buffer
-        let mut col_major = vec![0.0f32; rows * cols];
-        let mut row_buffer = vec![0.0f32; cols];
-
-        for row in 0..rows {
-            row_buffer.fill(0.0);
-            self.decode_row_to_buffer(row, &mut row_buffer);
-            for col in 0..cols {
-                col_major[col * rows + row] = row_buffer[col];
-            }
-        }
-
-        // Encode columns into blocks
+        // Pre-allocate output blocks
         let mut encoded_col_blocks = Vec::with_capacity(cols * blocks_per_col);
+
+        // Reusable buffer for one column (much smaller than rows*cols)
+        let mut col_buffer = vec![0.0f32; rows];
         let mut block_data = [0.0f32; 16];
 
+        // For each column, gather values from all rows and encode blocks
         for col in 0..cols {
-            let col_start = col * rows;
+            // Gather column values by iterating through row blocks
+            col_buffer.fill(0.0);
 
+            for row in 0..rows {
+                let block_offset = self.row_block_offset(row);
+                let block_idx = col / block_size;
+                let local_idx = col % block_size;
+                let block_row = self.row_in_block(row);
+
+                let block = &self.row_blocks[block_offset + block_idx];
+                col_buffer[row] = block.decode_row(block_row, local_idx);
+            }
+
+            // Encode this column into blocks
             for block_idx in 0..blocks_per_col {
                 let block_start = block_idx * block_size;
                 let block_end = (block_start + block_size).min(rows);
+                let block_len = block_end - block_start;
 
                 block_data[..block_size].fill(0.0);
-                block_data[..(block_end - block_start)]
-                    .copy_from_slice(&col_major[col_start + block_start..col_start + block_end]);
+                block_data[..block_len].copy_from_slice(&col_buffer[block_start..block_end]);
 
                 encoded_col_blocks.push(self.encode_block(&block_data[..block_size]));
             }
@@ -736,25 +761,27 @@ impl GraphMatrix {
     /// Returns error if file creation or writing fails
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
         use crate::formats::GmatHeader;
-        
+
         let mut file = std::fs::File::create(path)?;
-        
+
         // Convert format to u8
         let format_byte: u8 = self.format.into();
-        
+
+        // Write header with borrowed metadata (avoids clone)
         let (rows, cols) = self.shape;
-        let header = if let Some(ref metadata) = self.metadata {
-            GmatHeader::new_with_metadata(format_byte, rows as u64, cols as u64, metadata.clone())
-        } else {
-            GmatHeader::new(format_byte, rows as u64, cols as u64)
-        };
-        header.write_to(&mut file)?;
-        
+        GmatHeader::write_header_to(
+            &mut file,
+            format_byte,
+            rows as u64,
+            cols as u64,
+            self.metadata.as_ref(),
+        )?;
+
         // Write all blocks
         for block in &self.row_blocks {
             block.write_to(&mut file)?;
         }
-        
+
         Ok(())
     }
 
@@ -770,11 +797,26 @@ impl GraphMatrix {
     /// - File reading fails
     /// - Header is invalid
     pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
+        let mut file = std::fs::File::open(path)?;
+        Self::load_from_reader(&mut file)
+    }
+
+    /// Load GraphMatrix from a reader in GMAT format.
+    ///
+    /// Uses GmatHeader for format specification. The reader should be positioned
+    /// at the start of the GMAT data.
+    ///
+    /// # Arguments
+    /// - `reader`: Reader positioned at start of GMAT data
+    ///
+    /// # Errors
+    /// Returns error if:
+    /// - Reading fails
+    /// - Header is invalid
+    pub fn load_from_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         use crate::formats::GmatHeader;
 
-        let mut file = std::fs::File::open(path)?;
-
-        let header = GmatHeader::read_from(&mut file)?;
+        let header = GmatHeader::read_from(reader)?;
         let format = BlockFormat::try_from(header.format)?;
 
         let (rows, cols) = header.shape();
@@ -782,15 +824,18 @@ impl GraphMatrix {
 
         let mut row_blocks = Vec::with_capacity(expected_blocks);
         for _ in 0..expected_blocks {
-            row_blocks.push(AnyBlock::read_from(format, &mut file)?);
+            row_blocks.push(AnyBlock::read_from(format, reader)?);
         }
+
+        // Take ownership of metadata instead of cloning
+        let GmatHeader { metadata, .. } = header;
 
         Ok(Self {
             row_blocks,
             col_blocks: None,
             shape: (rows, cols),
             format,
-            metadata: header.metadata().cloned(),
+            metadata,
         })
     }
 }

@@ -99,7 +99,7 @@ fn quantize_kquant_with_opt<F>(
     encode_fn: F,
 ) -> Vec<u8>
 where
-    F: Fn(&mut [u8], f16, f16, &[u8; 8], &[u8; 8], &[&AnyBlock], usize),
+    F: Fn(&mut [u8], f16, f16, &[u8; 8], &[u8; 8], &[&AnyBlock], usize) + Sync,
 {
     quantize_superblocks(all_blocks, rows, cols, gmat_block_size, bytes_per_sb, |out, ctx| {
         let (d, dmin) = compute_superblock_scales(ctx.block_refs);

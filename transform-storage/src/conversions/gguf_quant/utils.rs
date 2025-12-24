@@ -1,6 +1,7 @@
 //! Utility functions for GGUF quantization
 
 use half::f16;
+use rayon::prelude::*;
 
 use crate::blocks::AnyBlock;
 use super::types::GgufQuantType;
@@ -262,7 +263,7 @@ pub struct SuperblockCtx<'a> {
     pub gmat_block_size: usize,
 }
 
-/// Generic superblock quantization loop. Eliminates 7x code duplication.
+/// Generic superblock quantization loop with parallel row processing.
 #[inline]
 pub fn quantize_superblocks<F>(
     all_blocks: &[&AnyBlock],
@@ -270,42 +271,47 @@ pub fn quantize_superblocks<F>(
     cols: usize,
     gmat_block_size: usize,
     bytes_per_sb: usize,
-    mut encode_sb: F,
+    encode_sb: F,
 ) -> Vec<u8>
 where
-    F: FnMut(&mut [u8], SuperblockCtx<'_>),
+    F: Fn(&mut [u8], SuperblockCtx<'_>) + Sync,
 {
     let gmat_blocks_per_row = cols / gmat_block_size;
     let gmat_blocks_per_sb = 256 / gmat_block_size;
     let superblocks_per_row = cols / 256;
-    let total_bytes = rows * superblocks_per_row * bytes_per_sb;
+    let row_bytes = superblocks_per_row * bytes_per_sb;
 
-    let mut output = vec![0u8; total_bytes];
+    // Process rows in parallel, each producing its own output slice
+    let row_outputs: Vec<Vec<u8>> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let row_start = row * gmat_blocks_per_row;
+            let mut row_output = vec![0u8; row_bytes];
 
-    for row in 0..rows {
-        let row_start = row * gmat_blocks_per_row;
-        let out_row_start = row * superblocks_per_row * bytes_per_sb;
+            for sb in 0..superblocks_per_row {
+                let gmat_start = row_start + sb * gmat_blocks_per_sb;
+                let gmat_end = gmat_start + gmat_blocks_per_sb;
 
-        for sb in 0..superblocks_per_row {
-            let gmat_start = row_start + sb * gmat_blocks_per_sb;
-            let gmat_end = gmat_start + gmat_blocks_per_sb;
+                let out_offset = sb * bytes_per_sb;
+                let out_slice = &mut row_output[out_offset..out_offset + bytes_per_sb];
 
-            let out_offset = out_row_start + sb * bytes_per_sb;
-            let out_slice = &mut output[out_offset..out_offset + bytes_per_sb];
+                let ctx = SuperblockCtx {
+                    block_refs: &all_blocks[gmat_start..gmat_end],
+                    gmat_block_size,
+                };
 
-            let ctx = SuperblockCtx {
-                block_refs: &all_blocks[gmat_start..gmat_end],
-                gmat_block_size,
-            };
+                encode_sb(out_slice, ctx);
+            }
 
-            encode_sb(out_slice, ctx);
-        }
-    }
+            row_output
+        })
+        .collect();
 
-    output
+    // Flatten row outputs into single contiguous buffer
+    row_outputs.into_iter().flatten().collect()
 }
 
-/// Legacy (32-element) block quantization loop.
+/// Legacy (32-element) block quantization loop with parallel row processing.
 #[inline]
 pub fn quantize_legacy_blocks<F>(
     all_blocks: &[&AnyBlock],
@@ -313,34 +319,40 @@ pub fn quantize_legacy_blocks<F>(
     cols: usize,
     gmat_block_size: usize,
     bytes_per_block: usize,
-    mut encode_fn: F,
+    encode_fn: F,
 ) -> Vec<u8>
 where
-    F: FnMut(&[&AnyBlock]) -> Vec<u8>,
+    F: Fn(&[&AnyBlock]) -> Vec<u8> + Sync,
 {
     let gmat_blocks_per_row = cols / gmat_block_size;
     let gmat_blocks_per_gguf = 32 / gmat_block_size;
     let gguf_blocks_per_row = cols / 32;
+    let row_bytes = gguf_blocks_per_row * bytes_per_block;
 
-    let mut output = vec![0u8; rows * gguf_blocks_per_row * bytes_per_block];
+    // Process rows in parallel
+    let row_outputs: Vec<Vec<u8>> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let row_start = row * gmat_blocks_per_row;
+            let mut row_output = vec![0u8; row_bytes];
 
-    for row in 0..rows {
-        let row_start = row * gmat_blocks_per_row;
-        let out_row_start = row * gguf_blocks_per_row * bytes_per_block;
+            for blk in 0..gguf_blocks_per_row {
+                let gmat_start = row_start + blk * gmat_blocks_per_gguf;
+                let gmat_end = gmat_start + gmat_blocks_per_gguf;
 
-        for blk in 0..gguf_blocks_per_row {
-            let gmat_start = row_start + blk * gmat_blocks_per_gguf;
-            let gmat_end = gmat_start + gmat_blocks_per_gguf;
+                let block_refs: Vec<&AnyBlock> = all_blocks[gmat_start..gmat_end].to_vec();
+                let encoded = encode_fn(&block_refs);
 
-            let block_refs: Vec<&AnyBlock> = all_blocks[gmat_start..gmat_end].to_vec();
-            let encoded = encode_fn(&block_refs);
+                let out_offset = blk * bytes_per_block;
+                row_output[out_offset..out_offset + encoded.len()].copy_from_slice(&encoded);
+            }
 
-            let out_offset = out_row_start + blk * bytes_per_block;
-            output[out_offset..out_offset + encoded.len()].copy_from_slice(&encoded);
-        }
-    }
+            row_output
+        })
+        .collect();
 
-    output
+    // Flatten row outputs into single contiguous buffer
+    row_outputs.into_iter().flatten().collect()
 }
 
 //=============================================================================

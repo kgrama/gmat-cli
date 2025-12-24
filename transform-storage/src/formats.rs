@@ -89,8 +89,19 @@ impl GmatHeader {
 
     /// Write header to writer
     pub fn write_to<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        Self::write_header_to(w, self.format, self.rows, self.cols, self.metadata.as_ref())
+    }
+
+    /// Write header with borrowed metadata to writer (avoids cloning)
+    pub fn write_header_to<W: Write>(
+        w: &mut W,
+        format: u8,
+        rows: u64,
+        cols: u64,
+        metadata: Option<&GmatMetadata>,
+    ) -> io::Result<()> {
         // Determine version based on metadata presence
-        let version = if self.metadata.is_some() {
+        let version = if metadata.is_some() {
             GMAT_VERSION_V2
         } else {
             GMAT_VERSION_V1
@@ -99,12 +110,12 @@ impl GmatHeader {
         // Write common header fields
         w.write_all(&GMAT_MAGIC)?;
         w.write_all(&version.to_le_bytes())?;
-        w.write_all(&[self.format])?;
-        w.write_all(&self.rows.to_le_bytes())?;
-        w.write_all(&self.cols.to_le_bytes())?;
+        w.write_all(&[format])?;
+        w.write_all(&rows.to_le_bytes())?;
+        w.write_all(&cols.to_le_bytes())?;
 
         // Write metadata section for V2
-        if let Some(ref metadata) = self.metadata {
+        if let Some(metadata) = metadata {
             let json_bytes = metadata.to_json_bytes()?;
             let metadata_len = json_bytes.len() as u32;
             w.write_all(&metadata_len.to_le_bytes())?;

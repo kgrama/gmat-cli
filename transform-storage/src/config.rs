@@ -226,7 +226,7 @@ impl AnyGraphMatrix {
 
     /// Load AnyGraphMatrix from a file in GMAT format.
     ///
-    /// Reads the header to determine block format and delegates to the appropriate GraphMatrix::load.
+    /// Reads the header to determine block format and loads using a single file handle.
     ///
     /// # Arguments
     /// - `path`: File path to load from
@@ -234,10 +234,10 @@ impl AnyGraphMatrix {
     /// # Errors
     /// Returns error if file reading fails or format is invalid
     pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
-        use std::io::Read;
-        
+        use std::io::{Read, Seek, SeekFrom};
+
         let mut file = std::fs::File::open(path)?;
-        
+
         // Read magic
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
@@ -247,31 +247,31 @@ impl AnyGraphMatrix {
                 format!("Invalid magic: expected GMAT, got {:?}", magic),
             ));
         }
-        
+
         // Read version
         let mut version_bytes = [0u8; 2];
         file.read_exact(&mut version_bytes)?;
         let version = u16::from_le_bytes(version_bytes);
-        if version != 1 {
+        if version != 1 && version != 2 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unsupported version: {}", version),
             ));
         }
-        
+
         // Read format
         let mut format_byte = [0u8; 1];
         file.read_exact(&mut format_byte)?;
         let format = BlockFormat::try_from(format_byte[0])?;
-        
-        // Reopen file for full load (GraphMatrix::load expects to read from start)
-        drop(file);
-        
+
+        // Seek back to start and load using reader API (avoids reopening file)
+        file.seek(SeekFrom::Start(0))?;
+
         match format {
-            BlockFormat::B16x8 => Ok(Self::B16x8(GraphMatrix::load(path)?)),
-            BlockFormat::B16x4 => Ok(Self::B16x4(GraphMatrix::load(path)?)),
-            BlockFormat::B8x8 => Ok(Self::B8x8(GraphMatrix::load(path)?)),
-            BlockFormat::B8x4 => Ok(Self::B8x4(GraphMatrix::load(path)?)),
+            BlockFormat::B16x8 => Ok(Self::B16x8(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::B16x4 => Ok(Self::B16x4(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::B8x8 => Ok(Self::B8x8(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::B8x4 => Ok(Self::B8x4(GraphMatrix::load_from_reader(&mut file)?)),
             BlockFormat::DualRow8x4 | BlockFormat::DualRow8x8 | BlockFormat::DualRow16x4 | BlockFormat::DualRow16x8 => {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -468,7 +468,7 @@ impl DualAnyGraphMatrix {
 
     /// Load DualAnyGraphMatrix from a file in GMAT format.
     ///
-    /// Reads the header to determine block format and delegates to the appropriate GraphMatrix::load.
+    /// Reads the header to determine block format and loads using a single file handle.
     ///
     /// # Arguments
     /// - `path`: File path to load from
@@ -476,10 +476,10 @@ impl DualAnyGraphMatrix {
     /// # Errors
     /// Returns error if file reading fails or format is invalid
     pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
-        use std::io::Read;
-        
+        use std::io::{Read, Seek, SeekFrom};
+
         let mut file = std::fs::File::open(path)?;
-        
+
         // Read magic
         let mut magic = [0u8; 4];
         file.read_exact(&mut magic)?;
@@ -489,31 +489,31 @@ impl DualAnyGraphMatrix {
                 format!("Invalid magic: expected GMAT, got {:?}", magic),
             ));
         }
-        
+
         // Read version
         let mut version_bytes = [0u8; 2];
         file.read_exact(&mut version_bytes)?;
         let version = u16::from_le_bytes(version_bytes);
-        if version != 1 {
+        if version != 1 && version != 2 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("Unsupported version: {}", version),
             ));
         }
-        
+
         // Read format
         let mut format_byte = [0u8; 1];
         file.read_exact(&mut format_byte)?;
         let format = BlockFormat::try_from(format_byte[0])?;
-        
-        // Reopen file for full load (GraphMatrix::load expects to read from start)
-        drop(file);
-        
+
+        // Seek back to start and load using reader API (avoids reopening file)
+        file.seek(SeekFrom::Start(0))?;
+
         match format {
-            BlockFormat::DualRow8x4 => Ok(Self::DualRow8x4(GraphMatrix::load(path)?)),
-            BlockFormat::DualRow8x8 => Ok(Self::DualRow8x8(GraphMatrix::load(path)?)),
-            BlockFormat::DualRow16x4 => Ok(Self::DualRow16x4(GraphMatrix::load(path)?)),
-            BlockFormat::DualRow16x8 => Ok(Self::DualRow16x8(GraphMatrix::load(path)?)),
+            BlockFormat::DualRow8x4 => Ok(Self::DualRow8x4(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::DualRow8x8 => Ok(Self::DualRow8x8(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::DualRow16x4 => Ok(Self::DualRow16x4(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::DualRow16x8 => Ok(Self::DualRow16x8(GraphMatrix::load_from_reader(&mut file)?)),
             BlockFormat::B8x4 | BlockFormat::B8x8 | BlockFormat::B16x4 | BlockFormat::B16x8 => {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
