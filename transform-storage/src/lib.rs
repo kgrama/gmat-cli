@@ -30,6 +30,7 @@ pub mod config;
 pub mod conversions;
 pub mod formats;
 pub mod graph_matrix;
+mod tensor_exports;
 
 #[cfg(test)]
 mod graph_matrix_tests;
