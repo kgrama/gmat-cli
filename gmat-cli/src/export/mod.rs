@@ -1,4 +1,6 @@
 //! Export module - GMAT to GGUF/SafeTensors conversion.
+//!
+//! Uses async pipeline with tokio-rayon for CPU-bound quantization.
 
 mod shard;
 mod util;
@@ -8,13 +10,14 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
-use std::thread;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use transform_storage::conversions::gguf_quant::{
     compute_tensor_importance, quantize_to_gguf, GgufQuantType, ScaleOptimization,
 };
 use transform_storage::GraphMatrix;
+
+use crate::workqueue::{run_pipeline, PipelineState};
 
 /// Represents a tensor entry from metadata - either simple 2D or N-D with planes.
 #[derive(Debug, Clone)]
@@ -129,7 +132,7 @@ fn find_tensor_entry(
 use crate::common::{load_config, load_gmat_model};
 use crate::config::export_config::{ExportConfig, QuantizationConfig, TensorExportMapping};
 
-use shard::{run_sharded_consumer, run_single_file_consumer, ProcessedTensor, ShardResult};
+use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
 use util::{num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name};
 
 /// Tensor analysis result for config generation.
@@ -280,16 +283,27 @@ pub fn generate_config_template(model_path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run the export process with parallel quantization and incremental building.
+/// Run the export process with async pipeline.
 ///
-/// Uses a producer-consumer pattern:
-/// - Producer threads (rayon pool): Load and quantize tensors in parallel
-/// - Consumer thread: Adds tensors to GGUF builder as they complete
-///
-/// This limits memory usage to ~buffer_size tensors at a time instead of all tensors.
+/// Uses tokio-rayon pattern:
+/// - Producer: async, sends jobs to channel
+/// - Workers: CPU-bound quantization on rayon pool
+/// - Writer: async, writes results to GGUF
 ///
 /// If `shard_size_override` is provided, it overrides the config file setting.
 pub fn run(
+    model_path: &str,
+    config_path: Option<&str>,
+    output_path: Option<&str>,
+    shard_size_override: Option<u64>,
+) -> Result<()> {
+    // Build tokio runtime and run async pipeline
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(run_async(model_path, config_path, output_path, shard_size_override))
+}
+
+/// Async implementation of export pipeline.
+async fn run_async(
     model_path: &str,
     config_path: Option<&str>,
     output_path: Option<&str>,
@@ -361,9 +375,6 @@ pub fn run(
                 .ok()?
                 .unwrap_or(default_quant);
 
-            // Look up tensor entry by source UUID or name
-            // The config maps UUID -> GGUF name, but metadata maps name -> UUID/entry
-            // We need to find the entry that matches this source UUID
             let tensor_entry = find_tensor_entry(&name_to_entry, &mapping.source, &tensors_dir)?;
 
             Some(QuantizeJob {
@@ -378,31 +389,29 @@ pub fn run(
     let total = jobs.len();
     println!("\nProcessing {} tensors...", total);
 
-    // Bounded channel to limit memory usage
     let buffer_size = num_cpus().saturating_mul(2).max(4);
-    let (tx, rx) = mpsc::sync_channel::<Result<ProcessedTensor>>(buffer_size);
 
-    let counter = AtomicUsize::new(0);
+    // Capture values for closures
+    let metadata_for_writer = metadata.clone();
+    let output_file_for_writer = output_file.clone();
 
-    // Clone metadata for consumer thread
-    let metadata_clone = metadata.clone();
-    let output_file_clone = output_file.clone();
-
-    // Spawn consumer thread that builds GGUF incrementally (with sharding support)
-    let consumer = thread::spawn(move || -> Result<ShardResult> {
-        if let Some(max_shard_size) = shard_size {
-            run_sharded_consumer(rx, &metadata_clone, &output_file_clone, max_shard_size)
-        } else {
-            run_single_file_consumer(rx, &metadata_clone, &output_file_clone)
-        }
-    });
-
-    // Producer: quantize tensors in parallel and send to consumer
-    jobs.into_par_iter().for_each(|job| {
-        let result = (|| -> Result<ProcessedTensor> {
+    run_pipeline::<QuantizeJob, ProcessedTensor, anyhow::Error, _, _, _, _, _>(
+        buffer_size,
+        buffer_size,
+        // Producer: send jobs
+        move |tx: mpsc::Sender<QuantizeJob>, state: Arc<PipelineState>| async move {
+            for job in jobs {
+                state.inc_produced();
+                if tx.send(job).await.is_err() {
+                    break;
+                }
+            }
+            Ok(())
+        },
+        // Worker: quantize tensor (runs on rayon)
+        move |job: QuantizeJob| -> Result<ProcessedTensor> {
             match &job.tensor_entry {
                 QuantizeEntry::Simple { tensor_path } => {
-                    // Simple 2D tensor - load and quantize directly
                     let matrix = GraphMatrix::load(tensor_path)
                         .map_err(|e| anyhow::anyhow!("Failed to load {}: {}", job.source, e))?;
 
@@ -411,12 +420,6 @@ pub fn run(
                     let quant_data = quantize_to_gguf(&matrix, job.quant_type, scale_opt, None)
                         .map_err(|e| anyhow::anyhow!("Quantize failed for {}: {}", job.target, e))?;
 
-                    let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                    println!(
-                        "[{}/{}] {} [{}x{}] -> {:?}",
-                        count, total, job.target, rows, cols, job.quant_type
-                    );
-
                     Ok(ProcessedTensor {
                         target_name: job.target,
                         shape: (rows, cols),
@@ -424,7 +427,6 @@ pub fn run(
                     })
                 }
                 QuantizeEntry::NdPlanes { original_shape, matrix_shape, plane_paths } => {
-                    // N-D tensor - quantize each plane and concatenate the quantized data
                     let (_rows, cols) = *matrix_shape;
                     let mut all_quant_data: Vec<u8> = Vec::new();
 
@@ -438,7 +440,6 @@ pub fn run(
                         all_quant_data.extend(plane_quant.data);
                     }
 
-                    // Build combined quant data with original shape info
                     let total_elements: usize = original_shape.iter().product();
                     let combined_rows = total_elements / cols;
 
@@ -448,12 +449,6 @@ pub fn run(
                         shape: (combined_rows, cols),
                     };
 
-                    let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
-                    println!(
-                        "[{}/{}] {} {:?} ({} planes) -> {:?}",
-                        count, total, job.target, original_shape, plane_paths.len(), job.quant_type
-                    );
-
                     Ok(ProcessedTensor {
                         target_name: job.target,
                         shape: (combined_rows, cols),
@@ -461,40 +456,38 @@ pub fn run(
                     })
                 }
             }
-        })();
+        },
+        // Writer: stream-write to GGUF
+        move |mut rx: mpsc::Receiver<Result<ProcessedTensor>>, state: Arc<PipelineState>| async move {
+            let mut writer = GgufStreamWriter::new(&metadata_for_writer, &output_file_for_writer, shard_size);
 
-        // Send result (ok or error) to consumer
-        let _ = tx.send(result);
-    });
+            while let Some(result) = rx.recv().await {
+                let tensor = result?;
+                let completed = state.inc_completed();
+                println!(
+                    "[{}/{}] {} [{},{}]",
+                    completed, total, tensor.target_name, tensor.shape.0, tensor.shape.1
+                );
+                writer.add_tensor(tensor)?;
+            }
 
-    // Drop sender to signal completion
-    drop(tx);
+            let result = writer.finish()?;
 
-    // Wait for consumer and get results
-    let result = consumer
-        .join()
-        .map_err(|_| anyhow::anyhow!("Consumer thread panicked"))??;
+            match result {
+                ShardResult::Single { tensor_count, bytes_written } => {
+                    println!("Done! {} tensors, {} bytes", tensor_count, bytes_written);
+                }
+                ShardResult::Sharded { shard_count, total_tensors, total_bytes } => {
+                    println!(
+                        "Done! {} shards, {} tensors, {} bytes total",
+                        shard_count, total_tensors, total_bytes
+                    );
+                }
+            }
 
-    match result {
-        ShardResult::Single {
-            tensor_count,
-            bytes_written,
-        } => {
-            println!("Done! {} tensors, {} bytes", tensor_count, bytes_written);
-        }
-        ShardResult::Sharded {
-            shard_count,
-            total_tensors,
-            total_bytes,
-        } => {
-            println!(
-                "Done! {} shards, {} tensors, {} bytes total",
-                shard_count, total_tensors, total_bytes
-            );
-        }
-    }
-
-    Ok(())
+            Ok(())
+        },
+    ).await
 }
 
 #[cfg(test)]

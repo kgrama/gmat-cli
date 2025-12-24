@@ -1,24 +1,22 @@
 //! Streaming tensor import pipeline with parallel processing.
 //!
-//! Performance optimizations:
-//! - Memory-mapped I/O to avoid loading entire files into RAM
-//! - Bounded channel for backpressure (limits memory usage)
-//! - Parallel consumer pool for tensor conversion
-//! - Arc<str> for UUID sharing to avoid clones
+//! Uses async pipeline with tokio-rayon:
+//! - Producer: async, reads safetensor files with mmap, sends tensors
+//! - Workers: CPU-bound tensor conversion on rayon pool
+//! - Writer: async, saves .gmat files and collects results
 
 use anyhow::Result;
 use memmap2::Mmap;
-use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use transform_storage::{BlockFormat, GmatMetadata, GraphMatrix};
 
 use crate::common::bytes_to_f32;
 use crate::config::import_config::ImportConfig;
+use crate::workqueue::{run_pipeline, PipelineState};
 
 /// Tensor data extracted from safetensor, ready for conversion.
 pub struct ExtractedTensor {
@@ -58,12 +56,12 @@ fn get_buffer_size() -> usize {
         .unwrap_or_else(|| num_cpus().saturating_mul(2).max(4))
 }
 
-/// Run the streaming import pipeline with bounded memory usage.
+/// Run the streaming import pipeline with async workqueue.
 ///
 /// Architecture:
-/// - Producer thread: Reads files sequentially with mmap, extracts tensors
-/// - Bounded channel: Limits in-flight tensors to control memory
-/// - Consumer pool: Parallel workers convert and save tensors
+/// - Producer: async, reads files with mmap, sends tensors
+/// - Workers: CPU-bound conversion on rayon pool
+/// - Writer: async, saves .gmat files
 pub fn run_streaming_import(
     safetensor_files: &[PathBuf],
     tensor_map: &HashMap<String, String>,
@@ -72,82 +70,89 @@ pub fn run_streaming_import(
     block_format: BlockFormat,
     total: usize,
 ) -> Result<Vec<SavedTensor>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(run_streaming_import_async(
+        safetensor_files,
+        tensor_map,
+        tensors_dir,
+        config,
+        block_format,
+        total,
+    ))
+}
+
+/// Async implementation of streaming import.
+async fn run_streaming_import_async(
+    safetensor_files: &[PathBuf],
+    tensor_map: &HashMap<String, String>,
+    tensors_dir: &Path,
+    config: &ImportConfig,
+    block_format: BlockFormat,
+    total: usize,
+) -> Result<Vec<SavedTensor>> {
     let buffer_size = get_buffer_size();
-    let (tx, rx) = mpsc::sync_channel::<ExtractedTensor>(buffer_size);
 
-    // Clone data for producer thread
+    // Clone for closures
     let files = safetensor_files.to_vec();
-    let tensor_map_owned: HashMap<String, String> = tensor_map.clone();
+    let tensor_map_owned = tensor_map.clone();
+    let tensors_dir_owned = tensors_dir.to_path_buf();
+    let config_owned = config.clone();
 
-    // Producer thread: extract tensors from files sequentially
-    let producer = thread::spawn(move || {
-        for file_path in &files {
-            if let Err(e) = extract_and_send_tensors_mmap(file_path, &tensor_map_owned, &tx) {
-                eprintln!("Warning: Failed to process {}: {}", file_path.display(), e);
+    // Shared result collector
+    let results = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let results_for_writer = Arc::clone(&results);
+
+    run_pipeline::<ExtractedTensor, SavedTensor, anyhow::Error, _, _, _, _, _>(
+        buffer_size,
+        buffer_size,
+        // Producer: extract tensors from safetensor files
+        move |tx: mpsc::Sender<ExtractedTensor>, state: Arc<PipelineState>| async move {
+            for file_path in &files {
+                if let Err(e) = extract_and_send_tensors(&file_path, &tensor_map_owned, &tx, &state).await {
+                    eprintln!("Warning: Failed to process {}: {}", file_path.display(), e);
+                }
             }
-        }
-        // tx drops here, closing the channel
-    });
+            Ok(())
+        },
+        // Worker: convert tensor to GMAT format (runs on rayon)
+        move |tensor: ExtractedTensor| -> Result<SavedTensor> {
+            convert_tensor(&tensor, &tensors_dir_owned, &config_owned, block_format)
+        },
+        // Writer: collect results and print progress
+        move |mut rx: mpsc::Receiver<Result<SavedTensor>>, state: Arc<PipelineState>| async move {
+            while let Some(result) = rx.recv().await {
+                match result {
+                    Ok(saved) => {
+                        let completed = state.inc_completed();
+                        println!(
+                            "[{}/{}] {} -> {}.gmat",
+                            completed, total, saved.name, saved.uuid
+                        );
+                        results_for_writer.lock().unwrap().push(saved);
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: {}", e);
+                    }
+                }
+            }
+            Ok(())
+        },
+    ).await?;
 
-    // Consumer: collect tensors in batches and process in parallel
-    let tensors_dir = tensors_dir.to_path_buf();
-    let config = config.clone();
-    let counter = AtomicUsize::new(0);
-
-    let mut saved = Vec::new();
-    let mut batch: Vec<ExtractedTensor> = Vec::with_capacity(buffer_size);
-
-    for tensor in rx {
-        batch.push(tensor);
-
-        // Process batch when full
-        if batch.len() >= buffer_size {
-            let batch_results = process_batch(&batch, &tensors_dir, &config, block_format, &counter, total);
-            saved.extend(batch_results);
-            batch.clear();
-        }
-    }
-
-    // Process remaining tensors
-    if !batch.is_empty() {
-        let batch_results = process_batch(&batch, &tensors_dir, &config, block_format, &counter, total);
-        saved.extend(batch_results);
-    }
-
-    producer.join().map_err(|_| anyhow::anyhow!("Producer thread panicked"))?;
+    let saved = Arc::try_unwrap(results)
+        .map_err(|_| anyhow::anyhow!("Failed to unwrap results"))?
+        .into_inner()
+        .unwrap();
 
     Ok(saved)
 }
 
-/// Process a batch of tensors in parallel.
-fn process_batch(
-    batch: &[ExtractedTensor],
-    tensors_dir: &Path,
-    config: &ImportConfig,
-    block_format: BlockFormat,
-    counter: &AtomicUsize,
-    total: usize,
-) -> Vec<SavedTensor> {
-    batch
-        .par_iter()
-        .filter_map(|tensor| {
-            let count = counter.fetch_add(1, Ordering::Relaxed) + 1;
-            match convert_and_save_tensor(tensor, tensors_dir, config, block_format, count, total) {
-                Ok(saved) => Some(saved),
-                Err(e) => {
-                    eprintln!("Warning: Failed to convert {}: {}", tensor.name, e);
-                    None
-                }
-            }
-        })
-        .collect()
-}
-
-/// Extract tensors from a safetensor file using memory-mapped I/O and send to channel.
-fn extract_and_send_tensors_mmap(
+/// Extract tensors from a safetensor file and send to channel.
+async fn extract_and_send_tensors(
     file_path: &PathBuf,
     tensor_map: &HashMap<String, String>,
-    tx: &mpsc::SyncSender<ExtractedTensor>,
+    tx: &mpsc::Sender<ExtractedTensor>,
+    state: &PipelineState,
 ) -> Result<()> {
     let file = File::open(file_path)?;
     let mmap = unsafe { Mmap::map(&file)? };
@@ -177,7 +182,6 @@ fn extract_and_send_tensors_mmap(
             1 => (1, 1, shape[0]), // 1D -> 1xN
             2 => (1, shape[0], shape[1]), // 2D -> 1 plane
             _ => {
-                // N-D: leading dims are planes, last 2 are matrix
                 let planes: usize = shape[..shape.len() - 2].iter().product();
                 let r = shape[shape.len() - 2];
                 let c = shape[shape.len() - 1];
@@ -188,12 +192,10 @@ fn extract_and_send_tensors_mmap(
         let plane_size = rows * cols;
         let dtype_str = format!("{:?}", dtype);
 
-        // Send each plane as a separate tensor
         for plane_idx in 0..num_planes {
             let start = plane_idx * plane_size;
             let end = start + plane_size;
 
-            // For multi-plane tensors, append plane index to UUID
             let plane_uuid = if num_planes > 1 {
                 format!("{}_{}", target_uuid, plane_idx)
             } else {
@@ -206,10 +208,9 @@ fn extract_and_send_tensors_mmap(
                 tensor_name.to_string()
             };
 
-            // Clone only the slice we need for this plane
             let plane_data = f32_data[start..end].to_vec();
 
-            // Send blocks on channel - backpressure limits memory usage
+            state.inc_produced();
             if tx.send(ExtractedTensor {
                 name: plane_name,
                 target_uuid: plane_uuid,
@@ -219,8 +220,7 @@ fn extract_and_send_tensors_mmap(
                 original_shape: shape.to_vec(),
                 plane_index: if num_planes > 1 { Some(plane_idx) } else { None },
                 num_planes,
-            }).is_err() {
-                // Channel closed, consumer stopped
+            }).await.is_err() {
                 return Ok(());
             }
         }
@@ -229,14 +229,12 @@ fn extract_and_send_tensors_mmap(
     Ok(())
 }
 
-/// Convert a single tensor to GMAT format and save it.
-fn convert_and_save_tensor(
+/// Convert a tensor to GMAT format (sync, runs on rayon).
+fn convert_tensor(
     tensor: &ExtractedTensor,
     tensors_dir: &Path,
     config: &ImportConfig,
     block_format: BlockFormat,
-    count: usize,
-    total: usize,
 ) -> Result<SavedTensor> {
     let (rows, cols) = tensor.shape;
 
@@ -251,18 +249,6 @@ fn convert_and_save_tensor(
     let out_file = tensors_dir.join(format!("{}.gmat", tensor.target_uuid));
     matrix.save(&out_file)?;
 
-    let density = matrix.density() * 100.0;
-    println!(
-        "[{}/{}] {} [{rows}x{cols}] -> {} (nnz={}, density={:.1}%)",
-        count,
-        total,
-        tensor.name,
-        out_file.file_name().unwrap().to_string_lossy(),
-        matrix.nnz(),
-        density
-    );
-
-    // Track original shape info for N-D tensors
     let (original_shape, plane_index, num_planes) = if tensor.num_planes > 1 {
         (
             Some(tensor.original_shape.clone()),
