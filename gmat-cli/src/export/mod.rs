@@ -221,7 +221,7 @@ fn analyze_model_tensors(
 
             // Progress update
             let count = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            if count % 100 == 0 || count == total {
+            if count.is_multiple_of(100) || count == total {
                 eprint!("\rAnalyzed {}/{} tensors...", count, total);
                 use std::io::Write;
                 let _ = std::io::stderr().flush();
@@ -523,7 +523,7 @@ async fn run_async(
         "trellis" => ScaleOptimization::Trellis {
             lambda: quant_config.trellis_lambda,
         },
-        "standard" | _ => ScaleOptimization::Standard,
+        _ => ScaleOptimization::Standard,
     };
 
     println!("Scale optimization: {:?}", scale_opt);

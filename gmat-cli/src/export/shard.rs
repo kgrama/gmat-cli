@@ -72,11 +72,10 @@ impl GgufStreamWriter {
         let tensor_size = tensor.quant_data.data.len() as u64;
 
         // Check if we need to flush current shard (sharded mode only)
-        if let Some(max_size) = self.max_shard_size {
-            if self.tensors_in_shard > 0 && self.current_shard_size + tensor_size > max_size {
+        if let Some(max_size) = self.max_shard_size
+            && self.tensors_in_shard > 0 && self.current_shard_size + tensor_size > max_size {
                 self.flush_shard()?;
             }
-        }
 
         // Add tensor to builder
         let (rows, cols) = tensor.shape;
@@ -207,7 +206,7 @@ impl GgufModelMetadata {
                 .get("model_type")
                 .or_else(|| metadata.get("architecture"))
                 .and_then(|v| v.as_str())
-                .map(|s| normalize_architecture(s)),
+                .map(normalize_architecture),
             name: metadata.get("name").and_then(|v| v.as_str()).map(String::from),
             vocab_size: get_num("vocab_size"),
             hidden_size: get_num("hidden_size").or_else(|| get_num("d_model")),
@@ -237,8 +236,8 @@ fn normalize_architecture(arch: &str) -> String {
         "phi" | "phi3" | "phi-3" => "phi3".to_string(),
         "gemma" | "gemma2" => "gemma".to_string(),
         "deepseek" | "deepseek2" | "deepseek_v2" => "deepseek2".to_string(),
-        "kimi_vl" | "kimi" => "llama".to_string(), // Kimi uses Llama-like arch
-        _ => arch.to_lowercase(),
+        "kimi_vl" | "kimi" => "llama".to_string(),
+        other => other.to_lowercase(),
     }
 }
 
@@ -256,31 +255,31 @@ fn new_builder_with_metadata(model_meta: &GgufModelMetadata) -> GGUFBuilder {
 
     // Architecture-specific metadata (prefixed with arch name)
     if let Some(v) = model_meta.vocab_size {
-        builder = builder.add_metadata(&format!("{}.vocab_size", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.vocab_size", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.hidden_size {
-        builder = builder.add_metadata(&format!("{}.embedding_length", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.embedding_length", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.num_layers {
-        builder = builder.add_metadata(&format!("{}.block_count", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.block_count", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.num_attention_heads {
-        builder = builder.add_metadata(&format!("{}.attention.head_count", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.attention.head_count", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.num_key_value_heads {
-        builder = builder.add_metadata(&format!("{}.attention.head_count_kv", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.attention.head_count_kv", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.intermediate_size {
-        builder = builder.add_metadata(&format!("{}.feed_forward_length", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.feed_forward_length", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.max_position_embeddings {
-        builder = builder.add_metadata(&format!("{}.context_length", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(format!("{}.context_length", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.rms_norm_eps {
-        builder = builder.add_metadata(&format!("{}.attention.layer_norm_rms_epsilon", arch), MetadataValue::F32(v as f32));
+        builder = builder.add_metadata(format!("{}.attention.layer_norm_rms_epsilon", arch), MetadataValue::F32(v as f32));
     }
     if let Some(v) = model_meta.rope_theta {
-        builder = builder.add_metadata(&format!("{}.rope.freq_base", arch), MetadataValue::F32(v as f32));
+        builder = builder.add_metadata(format!("{}.rope.freq_base", arch), MetadataValue::F32(v as f32));
     }
 
     builder

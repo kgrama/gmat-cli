@@ -149,7 +149,7 @@ pub fn quantize_gptq(
     let out_features = rows;
     let in_features = cols;
     let group_size = 128;
-    let num_groups = (in_features + group_size - 1) / group_size;
+    let num_groups = in_features.div_ceil(group_size);
     let packed_in = in_features / 8;
 
     // Collect all values into dense form
@@ -208,7 +208,7 @@ pub fn quantize_gptq(
     }
 
     // Pack zeros
-    let zeros_packed_groups = (num_groups + 7) / 8;
+    let zeros_packed_groups = num_groups.div_ceil(8);
     let mut qzeros_data = vec![0u32; zeros_packed_groups * out_features];
 
     for out_idx in 0..out_features {

@@ -106,7 +106,7 @@ fn set_high_bit(out: &mut [u8], high_offset: usize, idx: usize, q: u8) {
 #[inline(always)]
 fn set_low_nibble(out: &mut [u8], low_offset: usize, idx: usize, q: u8) {
     let low_nibble = q & 0x0F;
-    if idx % 2 == 0 {
+    if idx.is_multiple_of(2) {
         out[low_offset + idx / 2] = low_nibble;
     } else {
         out[low_offset + idx / 2] |= low_nibble << 4;
@@ -231,7 +231,7 @@ fn encode_4bit(
 
                     // Pack nibble
                     let byte_idx = global_idx / 2;
-                    if global_idx % 2 == 0 {
+                    if global_idx.is_multiple_of(2) {
                         out[byte_idx] = (out[byte_idx] & 0xF0) | (q & 0x0F);
                     } else {
                         out[byte_idx] = (out[byte_idx] & 0x0F) | ((q & 0x0F) << 4);
@@ -259,7 +259,7 @@ fn encode_4bit(
 
                     // Pack nibble
                     let byte_idx = global_idx / 2;
-                    if global_idx % 2 == 0 {
+                    if global_idx.is_multiple_of(2) {
                         out[byte_idx] = (out[byte_idx] & 0xF0) | (q & 0x0F);
                     } else {
                         out[byte_idx] = (out[byte_idx] & 0x0F) | ((q & 0x0F) << 4);

@@ -65,7 +65,7 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
                 };
                 
                 if needs_shift {
-                    octave_shift = octave_shift | (C::Mask::from(1u8) << i);
+                    octave_shift |= C::Mask::from(1u8) << i;
                 }
 
                 if C::Encoding::BITS == 4 {
@@ -156,7 +156,7 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
                 };
 
                 if needs_shift {
-                    octave_shift = octave_shift | (C::Mask::from(1u8) << i);
+                    octave_shift |= C::Mask::from(1u8) << i;
                 }
 
                 if C::Encoding::BITS == 4 {

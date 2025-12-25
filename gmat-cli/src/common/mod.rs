@@ -69,9 +69,11 @@ pub fn bytes_to_f32(data: &[u8], dtype: safetensors::Dtype, count: usize) -> Res
             if data.len() != count * 4 {
                 anyhow::bail!("F32 size mismatch: expected {} bytes, got {}", count * 4, data.len());
             }
-            Ok(data.chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                .collect())
+            data.chunks_exact(4)
+                .map(|c| -> Result<f32> {
+                    Ok(f32::from_le_bytes(c.try_into()?))
+                })
+                .collect::<Result<Vec<f32>>>()
         }
         Dtype::F16 => convert_f16_to_f32(data, count),
         Dtype::BF16 => convert_bf16_to_f32(data, count),

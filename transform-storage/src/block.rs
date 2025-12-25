@@ -167,7 +167,7 @@ pub fn decode_e0m4(nibble: u8) -> f32 {
 #[inline]
 pub fn get_packed_nibble(magnitudes: &[u8], idx: usize) -> u8 {
     let byte_idx = idx / 2;
-    if idx % 2 == 0 {
+    if idx.is_multiple_of(2) {
         magnitudes[byte_idx] & 0x0F
     } else {
         magnitudes[byte_idx] >> 4
@@ -178,7 +178,7 @@ pub fn get_packed_nibble(magnitudes: &[u8], idx: usize) -> u8 {
 #[inline]
 pub fn set_packed_nibble(magnitudes: &mut [u8], idx: usize, nibble: u8) {
     let byte_idx = idx / 2;
-    if idx % 2 == 0 {
+    if idx.is_multiple_of(2) {
         magnitudes[byte_idx] |= nibble & 0x0F;
     } else {
         magnitudes[byte_idx] |= (nibble & 0x0F) << 4;

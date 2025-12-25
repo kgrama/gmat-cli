@@ -19,7 +19,7 @@ pub fn fast_exp2(x: f32) -> f32 {
     let f = x - i as f32;
     // Polynomial approximation for 2^f where f in [0, 1)
     // Coefficients: ln(2), ln(2)^2/2!, ln(2)^3/3!
-    let poly = 1.0 + f * (0.693147 + f * (0.240226 + f * 0.055504));
+    let poly = 1.0 + f * (std::f32::consts::LN_2 + f * (0.240226 + f * 0.055504));
     // 2^i via IEEE 754 bit manipulation
     f32::from_bits(((i + 127) as u32) << 23) * poly
 }
@@ -163,7 +163,7 @@ pub fn gmat_blocks_per_group(gmat_block_size: usize) -> usize {
 #[inline(always)]
 pub fn pack_nibble(out: &mut [u8], offset: usize, elem_idx: usize, q: u8) {
     let byte_idx = offset + (elem_idx >> 1);
-    let shift = (elem_idx & 1) << 2;  // 0 or 4
+    let shift = if elem_idx.is_multiple_of(2) { 0 } else { 4 };
     let mask = 0x0F << shift;
     out[byte_idx] = (out[byte_idx] & !mask) | ((q & 0x0F) << shift);
 }
@@ -172,7 +172,7 @@ pub fn pack_nibble(out: &mut [u8], offset: usize, elem_idx: usize, q: u8) {
 #[inline(always)]
 pub fn set_high_bit_5(out: &mut [u8], high_offset: usize, elem_idx: usize, q: u8) {
     let high_bit = (q >> 4) & 1;
-    out[high_offset + (elem_idx >> 3)] |= high_bit << (elem_idx & 7);
+    out[high_offset + (elem_idx >> 3)] |= high_bit << if elem_idx.is_multiple_of(8) { 0 } else { elem_idx & 7 };
 }
 
 /// Set high 2 bits for 6-bit formats (bits 4-5 stored separately).
@@ -180,16 +180,8 @@ pub fn set_high_bit_5(out: &mut [u8], high_offset: usize, elem_idx: usize, q: u8
 pub fn set_high_bits_6(out: &mut [u8], high_offset: usize, elem_idx: usize, q: u8) {
     let high_bits = (q >> 4) & 0x03;
     let byte_idx = high_offset + (elem_idx >> 2);
-    let bit_offset = (elem_idx & 3) << 1;
+    let bit_offset = if elem_idx.is_multiple_of(4) { 0 } else { (elem_idx & 3) << 1 };
     out[byte_idx] |= high_bits << bit_offset;
-}
-
-/// Pack 2-bit value at element index.
-#[inline(always)]
-pub fn pack_2bit(out: &mut [u8], offset: usize, elem_idx: usize, q: u8) {
-    let byte_idx = offset + (elem_idx >> 2);
-    let shift = (elem_idx & 3) << 1;
-    out[byte_idx] |= (q & 0x03) << shift;
 }
 
 //=============================================================================

@@ -59,7 +59,7 @@ pub(crate) fn encode_dual_row_blocks(
     block_size: usize,
     blocks_per_row: usize,
 ) -> Vec<AnyBlock> {
-    let row_pairs = (rows + 1) / 2;
+    let row_pairs = rows.div_ceil(2);
     (0..row_pairs)
         .into_par_iter()
         .flat_map(|row_pair| {

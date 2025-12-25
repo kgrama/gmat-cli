@@ -89,7 +89,7 @@ async fn produce_tensors_task(
     state: Arc<PipelineState>,
 ) -> Result<()> {
     for file_path in &files {
-        if let Err(e) = extract_and_send_tensors(&file_path, &tensor_map, &tx, &state).await {
+        if let Err(e) = extract_and_send_tensors(file_path, &tensor_map, &tx, &state).await {
             eprintln!("Warning: Failed to process {}: {}", file_path.display(), e);
         }
     }

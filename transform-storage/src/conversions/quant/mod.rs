@@ -52,7 +52,7 @@ pub fn quantize(
 /// - `pack_format`: Bit-packing format (None, Awq, Gptq, Packed)
 /// - `clip_percentile`: Fraction of outliers to clip (0.0 = none)
 /// - `log2_center`: Optional pre-computed log2 center (e.g., from `matrix.log2_stats()`)
-///                  If None, computed from the matrix
+///   If None, computed from the matrix
 /// - `device`: Target device for output tensors
 ///
 /// # Returns
@@ -237,7 +237,7 @@ fn create_empty_output(
     device: &Device,
 ) -> Result<QuantizedTensors> {
     let pack_factor = pack_format.pack_factor(dtype.bits());
-    let packed_cols = (cols + pack_factor - 1) / pack_factor;
+    let packed_cols = cols.div_ceil(pack_factor);
 
     let weights = match dtype {
         QuantDType::F16 => Tensor::zeros((rows, cols), DType::F16, device)?,

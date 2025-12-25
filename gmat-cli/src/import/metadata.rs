@@ -18,17 +18,14 @@ use crate::config::import_config::ModelMetadata;
 /// Uses memory-mapped I/O to avoid loading entire files for metadata extraction.
 pub fn extract_model_metadata(safetensor_files: &[PathBuf]) -> Result<ModelMetadata> {
     // Try to find config.json in the parent directory of the first safetensor file
-    if let Some(first_file) = safetensor_files.first() {
-        if let Some(parent) = first_file.parent() {
+    if let Some(first_file) = safetensor_files.first()
+        && let Some(parent) = first_file.parent() {
             let config_path = parent.join("config.json");
-            if config_path.exists() {
-                if let Ok(metadata) = extract_from_config_json(&config_path) {
-                    println!("Loaded metadata from config.json");
-                    return Ok(metadata);
-                }
+            if config_path.exists() && let Ok(metadata) = extract_from_config_json(&config_path) {
+                println!("Loaded metadata from config.json");
+                return Ok(metadata);
             }
         }
-    }
 
     // Try to extract from safetensor __metadata__ using mmap
     for file_path in safetensor_files {

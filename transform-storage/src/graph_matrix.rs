@@ -110,7 +110,7 @@ impl GraphMatrix {
         );
 
         let block_size = format.block_size();
-        let blocks_per_row = layout::calc_blocks_per_row(cols, block_size);
+        let blocks_per_row = cols.div_ceil(block_size);
 
         let row_blocks = if format.is_dual_row() {
             encoding::encode_dual_row_blocks(data, rows, cols, format, block_size, blocks_per_row)
@@ -308,7 +308,7 @@ impl GraphMatrix {
         assert!(row < rows, "Row index {} out of bounds for matrix with {} rows", row, rows);
         
         let block_size = self.format.block_size();
-        let blocks_per_row = (cols + block_size - 1) / block_size;
+        let blocks_per_row = cols.div_ceil(block_size);
         
         if self.format.is_dual_row() {
             // For dual-row: find which block pair this row belongs to

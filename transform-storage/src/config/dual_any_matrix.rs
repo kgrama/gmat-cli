@@ -324,7 +324,7 @@ mod tests {
         let config = StorageConfig::new().format(BlockFormat::DualRow8x4);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (4, 8), &config);
         let density = matrix.density();
-        assert!(density >= 0.0 && density <= 1.0);
+        assert!((0.0..=1.0).contains(&density));
     }
 
     #[test]

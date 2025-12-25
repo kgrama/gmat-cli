@@ -333,9 +333,9 @@ fn write_import_metadata(output_dir: &Path, config: &ImportConfig, saved: &[Save
         let mut planes = planes;
         planes.sort_by_key(|p| p.plane_index.unwrap_or(0));
 
-        let first = planes.first().unwrap();
-        let original_shape = first.original_shape.as_ref().unwrap();
-        let num_planes = first.num_planes.unwrap();
+        let first = planes.first().ok_or_else(|| anyhow::anyhow!("No planes found for N-D tensor: {}", base_name))?;
+        let original_shape = first.original_shape.as_ref().ok_or_else(|| anyhow::anyhow!("Missing original_shape for N-D tensor: {}", base_name))?;
+        let num_planes = first.num_planes.ok_or_else(|| anyhow::anyhow!("Missing num_planes for N-D tensor: {}", base_name))?;
         let (rows, cols) = first.matrix_shape;
 
         let plane_uuids: Vec<&str> = planes.iter().map(|p| p.uuid.as_str()).collect();
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn test_tensor_map_filters_excluded() {
-        let mappings = vec![
+        let mappings = [
             TensorMapping { source: "t1".into(), target: "u1".into(), include: true },
             TensorMapping { source: "t2".into(), target: "u2".into(), include: false },
             TensorMapping { source: "t3".into(), target: "u3".into(), include: true },

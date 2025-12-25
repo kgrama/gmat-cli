@@ -31,7 +31,7 @@ pub fn quantize_simple_packed(
     let weights = match dtype {
         QuantDType::I4 => {
             // Pack 2 i4 values per u8: low nibble = even idx, high nibble = odd idx
-            let packed_cols = (cols + 1) / 2;
+            let packed_cols = cols.div_ceil(2);
             let mut data = vec![0u8; rows * packed_cols];
 
             for row in 0..rows {

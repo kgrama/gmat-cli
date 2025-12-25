@@ -175,7 +175,7 @@ impl CooMatrix {
         // Expand row_ptr to row indices
         for (row_idx, window) in csr.row_ptr.windows(2).enumerate() {
             let count = window[1] - window[0];
-            row_indices.extend(std::iter::repeat(row_idx).take(count));
+            row_indices.extend(std::iter::repeat_n(row_idx, count));
         }
 
         Self {

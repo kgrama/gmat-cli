@@ -109,7 +109,7 @@ fn trellis_dual(
         for &s1 in &candidates1[0] {
             let err0 = compute_quant_error(offsets0[0], s0, num_states);
             let err1 = compute_quant_error(offsets1[0], s1, num_states);
-            let coupling = gamma * (s0 as i16 - s1 as i16).abs() as f32;
+            let coupling = gamma * (s0 as i16 - s1 as i16).unsigned_abs() as f32;
             cost[0].insert((s0, s1), err0 + err1 + coupling);
         }
     }
@@ -127,7 +127,7 @@ fn trellis_dual(
                             let err1 = compute_quant_error(offsets1[i], curr_s1, num_states);
                             let trans0 = compute_transition_cost(prev_s0, curr_s0, lambda);
                             let trans1 = compute_transition_cost(prev_s1, curr_s1, lambda);
-                            let coupling = gamma * (curr_s0 as i16 - curr_s1 as i16).abs() as f32;
+                            let coupling = gamma * (curr_s0 as i16 - curr_s1 as i16).unsigned_abs() as f32;
 
                             let candidate = prev_cost + err0 + err1 + trans0 + trans1 + coupling;
 
@@ -205,7 +205,7 @@ pub fn quantize_trellis_single(
 
     let (rows, cols) = matrix.shape();
     let block_size = 16;
-    let num_blocks = (cols + block_size - 1) / block_size;
+    let num_blocks = cols.div_ceil(block_size);
     let num_states = 16;
 
     let mut dense = vec![0.0f32; rows * cols];
@@ -277,9 +277,9 @@ pub fn quantize_trellis_dual(
 
     let (rows, cols) = matrix.shape();
     let block_size = 16;
-    let num_blocks = (cols + block_size - 1) / block_size;
+    let num_blocks = cols.div_ceil(block_size);
     let num_states = 16;
-    let row_pairs = (rows + 1) / 2;
+    let row_pairs = rows.div_ceil(2);
 
     let mut dense = vec![0.0f32; rows * cols];
     for row in 0..rows {
@@ -297,7 +297,7 @@ pub fn quantize_trellis_dual(
 
         for blk in 0..num_blocks {
             let start = blk * block_size;
-            let end = (start + block_size).min(cols);
+            let end = start.saturating_add(block_size).min(cols);
 
             let vals0: Vec<f32> = dense[row0 * cols + start..row0 * cols + end].to_vec();
             let vals1: Vec<f32> = dense[row1 * cols + start..row1 * cols + end].to_vec();

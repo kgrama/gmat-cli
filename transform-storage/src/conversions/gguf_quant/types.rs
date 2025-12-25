@@ -197,7 +197,7 @@ impl GgufQuantType {
 
     /// Check if cols are aligned for this format
     pub fn is_aligned(&self, cols: usize) -> bool {
-        cols % self.block_size() == 0
+        cols.is_multiple_of(self.block_size())
     }
 
     /// Returns true if this is a K-quant format

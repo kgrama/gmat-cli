@@ -32,7 +32,7 @@ pub struct TensorMapping {
 }
 
 /// Model metadata configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelMetadata {
     pub architecture: Option<String>,
     pub vocab_size: Option<u64>,
@@ -50,20 +50,6 @@ impl Default for ImportConfig {
             block_format: "B8x8".to_string(),
             tensor_map: Vec::new(),
             metadata: ModelMetadata::default(),
-        }
-    }
-}
-
-impl Default for ModelMetadata {
-    fn default() -> Self {
-        Self {
-            architecture: None,
-            vocab_size: None,
-            hidden_size: None,
-            num_layers: None,
-            num_attention_heads: None,
-            intermediate_size: None,
-            max_position_embeddings: None,
         }
     }
 }
