@@ -1,194 +1,120 @@
-# GMAT CLI
+# GMAT-CLI Wiki
 
-**Model management infrastructure between training and inference. No GPU required.**
+Welcome to the GMAT-CLI documentation hub. This wiki provides comprehensive guides for converting SafeTensors models to quantized GGUF format using CPU-only processing.
 
-GMAT-CLI converts HuggingFace models (SafeTensors) to tensor-addressed GMAT format, then exports to production-ready GGUF with fine-grained quantization control. All processing runs on CPU with bounded memory usage—convert 70B+ models on any machine without specialized hardware.
+## What is GMAT-CLI?
 
-## Why GMAT?
+GMAT-CLI is a CPU-only model management infrastructure that bridges the gap between model training and production inference. It converts HuggingFace SafeTensors models into an intermediate GMAT storage format, then exports them to production-ready GGUF files with fine-grained quantization control. The entire pipeline runs without GPU requirements, enabling 70B+ model processing on standard hardware through streaming architecture and bounded memory usage.
 
-### The Problem
+## Architecture Overview
 
-Managing LLMs in production is painful:
-
-| Challenge | Reality |
-|-----------|---------|
-| **Storage explosion** | Base model + 20 fine-tunes = 20 near-duplicate 70B copies |
-| **Quantization chaos** | Ad-hoc decisions, no reproducibility |
-| **No audit trail** | "How was that production model quantized?" |
-| **One-size-fits-all** | Same quantization for embeddings and FFN layers? |
-
-### The GMAT Approach
-
+```mermaid
+flowchart LR
+    ST[SafeTensors Input]
+    IC[import_config.json]
+    IMPORT[gmat import]
+    GMAT[GMAT Storage<br/>UUID-addressed tensors]
+    EC[export_config.json]
+    EXPORT[gmat export]
+    GGUF[GGUF Output<br/>Q2_K to Q8_0]
+    
+    ST --> IMPORT
+    IC -.optional.-> IMPORT
+    IMPORT --> GMAT
+    GMAT --> EXPORT
+    EC -.quantization profiles.-> EXPORT
+    EXPORT --> GGUF
+    
+    style GMAT fill:#e1f5ff
+    style IC fill:#fff4e1
+    style EC fill:#fff4e1
 ```
-SafeTensors → GMAT → GGUF
-   (source)   (managed)  (deployed)
-```
 
-**1. Tensor-Addressed Storage**
+The workflow separates model storage (GMAT) from deployment configuration (export configs), enabling:
+- **Multiple quantization profiles** from a single GMAT source
+- **Per-tensor quantization overrides** via export_config.json
+- **Reproducible builds** with version-controlled configs
+- **Block format selection** via import_config.json
 
-GMAT stores each tensor as an individual UUID-addressed file:
+## Key Concepts
+
+### GMAT Storage Format
+
+GMAT uses tensor-addressed storage where each tensor becomes an individual UUID-named file. This design enables:
+- Tensor-level versioning and replacement
+- Foundation for future deduplication across fine-tunes
+- Direct tensor access without loading entire model
+- Individual tensor analysis and optimization
+
+Structure:
 ```
 model.gmat/
-├── metadata.json
+├── metadata.json          # Architecture and tensor mapping
 └── tensors/
-    ├── 3b6d6f4a-9cf5-4d97-9b08-ce07ddc0435d.gmat  # output.weight
-    ├── e268e395-888f-49ed-9f59-24ea9d10be77.gmat  # token_embd.weight
+    ├── <uuid>.gmat       # Individual tensor files
     └── ...
 ```
 
-This enables:
-- Tensor-level versioning and diffing
-- Foundation for deduplication across fine-tunes
-- Individual tensor replacement/updates
+### Block-Sparse Encoding
 
-**2. Quantization as Configuration**
+Tensors are stored using block-sparse log-encoded format with configurable block sizes:
+- **B8x4, B8x8** (default): 8-row blocks, 4 or 8 columns
+- **B16x4, B16x8**: 16-row blocks for larger tensors
+- **DualRow variants**: Memory-optimized encoding
 
-Store full-precision GMAT once. Create multiple export configs:
+Block format affects intermediate storage size and processing performance. Larger blocks reduce overhead but require more contiguous memory.
 
-```
-model.gmat/
-    ├── export-q4-cost.json      → model-q4.gguf (cost tier)
-    ├── export-q8-premium.json   → model-q8.gguf (quality tier)
-    └── export-q6-balanced.json  → model-q6.gguf (balanced)
-```
+### Quantization Profiles
 
-Same source tensors, different deployment profiles. Version-control your quantization decisions.
+Export configs define quantization strategies with global defaults and per-tensor overrides:
 
-**3. Per-Tensor Precision Control**
+| Family | Types | Use Case |
+|--------|-------|----------|
+| **K-quant** | Q2_K, Q3_K_S/M/L, Q4_K_S/M, Q5_K_S/M, Q6_K | Production standard (Q4_K_M default) |
+| **I-quant** | IQ4_XS, IQ4_NL | Experimental, higher quality at same size |
+| **Legacy** | Q4_0, Q5_0, Q8_0 | Compatibility |
 
-Not all tensors are equal:
+Trellis scale optimization (lambda=0.3 default) improves quantization quality with minimal speed cost.
 
-| Tensor Type | Impact | Recommendation |
-|-------------|--------|----------------|
-| Embeddings (`token_embd`) | High | Q6-Q8 |
-| Output layer (`lm_head`) | High | Q6-Q8 |
-| Attention Q/K | Medium | Q4-Q5 |
-| FFN gate/up | Lower | Q4 |
+## Getting Started
 
-GMAT auto-recommends based on tensor analysis, with full override capability.
+Follow these guides in order:
 
-**4. Reproducible, Auditable Builds**
+1. **[Installation](Installation.md)** - Prerequisites, Rust setup, build/install, verification
+2. **[Import Command](Import-Command.md)** - Convert SafeTensors to GMAT storage
+3. **[Export Command](Export-Command.md)** - Generate quantized GGUF from GMAT
+4. **[Configuration Files](Configuration-Files.md)** - Customize import/export behavior
 
-JSON configs capture every decision:
-- Which tensors included
-- Per-tensor quantization types
-- Scale optimization settings
-- Model metadata
+## Wiki Documentation
 
-Put configs in git. Know exactly how any deployment was built.
+| Page | Description |
+|------|-------------|
+| [Installation](Installation.md) | System requirements (Rust 1.70+, 4+ CPU cores, 8GB+ RAM), installation methods, troubleshooting |
+| [Import Command](Import-Command.md) | SafeTensors→GMAT conversion, config generation, block format selection, sharded input handling |
+| [Export Command](Export-Command.md) | GMAT→GGUF export, quantization type reference, per-tensor overrides, sharding output, Trellis optimization |
+| [Configuration Files](Configuration-Files.md) | import_config.json and export_config.json schemas, examples, config generation workflow |
+| [Technical Details](Technical-Details.md) | Block encoding algorithms, quantization deep-dive (K-quant, I-quant), memory efficiency, hardware requirements |
+| [FAQ](FAQ.md) | Common questions by category: General, Installation, Import, Export, Performance, Quantization, Troubleshooting |
 
-## Use Cases
+## Quick Links
 
-### Fine-Tune Factory
+**Common Tasks:**
 
-You have 50 fine-tunes of Llama 70B. Each shares 99% of tensors with base model.
+- [Install GMAT-CLI](Installation.md#installation-methods)
+- [Import your first model](Import-Command.md#basic-usage)
+- [Generate export config](Export-Command.md#config-generation)
+- [Choose quantization type](Export-Command.md#quantization-types)
+- [Override specific tensors](Configuration-Files.md#per-tensor-overrides)
+- [Process large models (70B+)](Technical-Details.md#memory-efficiency)
+- [Troubleshoot memory issues](FAQ.md#performance)
 
-GMAT's tensor-addressed storage:
-- Consistent workflow across all fine-tunes
-- Tensor-level organization enables future deduplication
-- Same export configs work across fine-tunes
+**Reference:**
 
-### Multi-Tier Deployment
+- [Supported architectures](Technical-Details.md#supported-architectures)
+- [Block format comparison](Technical-Details.md#block-encoding)
+- [Quantization quality/speed tradeoffs](Export-Command.md#quantization-types)
+- [Hardware recommendations](Technical-Details.md#hardware-requirements)
 
-Different SLAs need different quality/cost tradeoffs:
+---
 
-| Tier | Quantization | Use Case |
-|------|--------------|----------|
-| Premium | Q8 default, embeddings Q8 | Quality-critical |
-| Standard | Q6 default, embeddings Q8 | Balanced |
-| Economy | Q4 default, embeddings Q6 | Cost-sensitive |
-
-One GMAT source → three export configs → three deployment targets.
-
-### Compliance & Audit
-
-Regulated industries need reproducibility:
-- JSON configs in version control
-- Full trail of quantization decisions
-- Rebuild any historical deployment exactly
-
-### Large Model Processing
-
-70B+ models don't fit in RAM. GMAT handles this on CPU:
-- **No GPU required**—runs on any server or laptop
-- Streaming producer-consumer pipeline with bounded memory
-- Memory-mapped I/O avoids loading full files
-- Parallel processing via Rayon (scales with CPU cores)
-- Sharded output for deployment flexibility
-
-## Quick Start
-
-```bash
-# Install
-make install
-
-# Import: SafeTensors → GMAT
-gmat import --model ./model.safetensors --generate-config
-# Edit import_config.json if needed
-gmat import --model ./model.safetensors --config import_config.json -o ./output
-
-# Export: GMAT → GGUF
-gmat export --model ./output/model.gmat --generate-config
-# Edit export_config.json for your quantization profile
-gmat export --model ./output/model.gmat --config export_config.json -o model.gguf
-```
-
-## Supported Model Types
-
-GMAT handles metadata extraction from various HuggingFace model architectures:
-
-### Text Generation (LLMs)
-
-| Architecture | Models | Config Type |
-|--------------|--------|-------------|
-| **Llama** | Llama 2/3, Mistral, Mixtral | Flat |
-| **Qwen** | Qwen, Qwen2 | Flat |
-| **Phi** | Phi-2, Phi-3, Phi-3.5 | Flat |
-| **Gemma** | Gemma, Gemma 2 | Flat |
-| **DeepSeek** | DeepSeek, DeepSeek-V2 | Flat/Nested |
-
-### Vision-Language Models (VLMs)
-
-| Architecture | Models | Config Type |
-|--------------|--------|-------------|
-| **LLaVA** | LLaVA 1.5/1.6 | `text_config` |
-| **Qwen-VL** | Qwen-VL, Qwen2-VL | Flat |
-| **Kimi-VL** | Kimi-VL (MoE) | `text_config` |
-| **InternVL** | InternVL2 | `llm_config` |
-| **DeepSeek-VL** | DeepSeek-VL2 | `language_config` |
-| **Phi-Vision** | Phi-3.5-Vision | Flat |
-
-### Encoder-Decoder / TTS / ASR
-
-| Architecture | Models | Config Type |
-|--------------|--------|-------------|
-| **T5** | T5, Flan-T5 | `d_model`, `d_ff` |
-| **BART** | BART, mBART | `d_model` |
-| **Whisper** | Whisper | `d_model`, `decoder_layers` |
-| **SpeechT5** | SpeechT5 | Flat |
-| **MMS-TTS** | MMS-TTS | Flat |
-
-GMAT automatically detects nested config structures (`text_config`, `language_config`, `llm_config`) and extracts the correct metadata for both import and GGUF export.
-
-## Documentation
-
-- [Installation](Installation.md) - Build and install (includes system requirements)
-- [Import Command](Import-Command.md) - SafeTensors to GMAT conversion
-- [Export Command](Export-Command.md) - GMAT to GGUF with quantization
-- [Configuration Files](Configuration-Files.md) - Config file reference
-- [Technical Details](Technical-Details.md) - Block formats, encoding, compression tradeoffs
-- [FAQ](FAQ.md) - Defaults, trellis optimization, static saliency
-
-## Example
-
-See `example/tiny_llm/` for a complete multi-profile workflow:
-
-```
-tiny_llm.safetensors  →  model.gmat/  →  tiny_llm-economy.gguf   (Q4, smallest)
-                              ↓
-                         export configs  →  tiny_llm-balanced.gguf  (Q4/Q6 mix)
-                              ↓
-                              →  tiny_llm-premium.gguf  (Q8, highest quality)
-```
-
-Three export profiles from one GMAT source - illustrating quantization as configuration.
+For quick setup instructions, see the main [README](../README.md). For development and contribution, see [CONTRIBUTING](../CONTRIBUTING.md).
