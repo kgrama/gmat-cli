@@ -355,9 +355,9 @@ pub fn transpose_tile(
     }
 
     // Encode each column as a block
-    for col in 0..block_size {
+    for (col, out_block) in out.iter_mut().enumerate().take(block_size) {
         let col_start = col * block_size;
-        out[col] = encode_from_log2(&scratch[col_start..col_start + block_size], format);
+        *out_block = encode_from_log2(&scratch[col_start..col_start + block_size], format);
     }
 }
 

@@ -62,19 +62,18 @@ impl Default for LogGroupStats {
 pub fn log2_group_stats(gmat_blocks: &[&AnyBlock]) -> LogGroupStats {
     let mut stats = LogGroupStats::default();
 
-    for blk in gmat_blocks {
-        for (_, log2_mag, sign) in blk.log_iter() {
-            stats.log2_sum += log2_mag as f64;
-            stats.count += 1;
+    // Use iter_block_elements with block_size=1 since we don't use elem_idx
+    for (_, log2_mag, sign) in iter_block_elements(gmat_blocks, 1, 0) {
+        stats.log2_sum += log2_mag as f64;
+        stats.count += 1;
 
-            if sign == 1 {
-                // Negative value
-                stats.neg_count += 1;
-                stats.neg_log2_max = stats.neg_log2_max.max(log2_mag);
-            } else {
-                // Positive value
-                stats.log2_max = stats.log2_max.max(log2_mag);
-            }
+        if sign == 1 {
+            // Negative value
+            stats.neg_count += 1;
+            stats.neg_log2_max = stats.neg_log2_max.max(log2_mag);
+        } else {
+            // Positive value
+            stats.log2_max = stats.log2_max.max(log2_mag);
         }
     }
 
@@ -235,10 +234,9 @@ pub fn build_log2_thresholds<const N: usize>(log2_scale: f32) -> [f32; N] {
 #[inline]
 pub fn log2_group_max(blocks: &[&AnyBlock]) -> f32 {
     let mut max = f32::NEG_INFINITY;
-    for blk in blocks {
-        for (_, log2_mag, _) in blk.log_iter() {
-            max = if log2_mag > max { log2_mag } else { max };
-        }
+    // Use iter_block_elements with block_size=1 since we don't use elem_idx
+    for (_, log2_mag, _) in iter_block_elements(blocks, 1, 0) {
+        max = if log2_mag > max { log2_mag } else { max };
     }
     max
 }
@@ -252,6 +250,44 @@ pub fn group_max_abs(blocks: &[&AnyBlock]) -> f32 {
     } else {
         0.0
     }
+}
+
+//=============================================================================
+// Block Element Iterators
+//=============================================================================
+
+/// Iterate over all elements in a slice of GMAT blocks.
+/// Yields (elem_idx, log2_mag, sign) for each non-zero element.
+#[inline]
+pub fn iter_block_elements<'a>(
+    gmat_blocks: &'a [&'a AnyBlock],
+    gmat_block_size: usize,
+    base_offset: usize,
+) -> impl Iterator<Item = (usize, f32, u8)> + 'a {
+    gmat_blocks
+        .iter()
+        .enumerate()
+        .flat_map(move |(blk_idx, blk)| {
+            blk.log_iter().map(move |(idx, log2_mag, sign)| {
+                (base_offset + blk_idx * gmat_block_size + idx, log2_mag, sign)
+            })
+        })
+}
+
+/// Iterate over elements within a group (for K-quant/I-quant formats).
+#[inline]
+pub fn iter_group_elements<'a>(
+    gmat_blocks: &'a [&'a AnyBlock],
+    group_idx: usize,
+    blocks_per_group: usize,
+    gmat_block_size: usize,
+    elements_per_group: usize,
+) -> impl Iterator<Item = (usize, f32, u8)> + 'a {
+    let group_start = group_idx * blocks_per_group;
+    let group_end = (group_start + blocks_per_group).min(gmat_blocks.len());
+    let base_offset = group_idx * elements_per_group;
+
+    iter_block_elements(&gmat_blocks[group_start..group_end], gmat_block_size, base_offset)
 }
 
 //=============================================================================
@@ -376,13 +412,13 @@ where
     let blocks_per_group = elements_per_group / gmat_block_size;
     let d_f32 = f32::from(d);
 
-    for g in 0..N {
+    for (g, scale) in scales.iter_mut().enumerate().take(N) {
         let start = g * blocks_per_group;
         let end = (start + blocks_per_group).min(gmat_blocks.len());
         let log2_max = log2_group_max(&gmat_blocks[start..end]);
 
         if d_f32 > 1e-10 && log2_max.is_finite() {
-            scales[g] = scale_fn(log2_max, d_f32);
+            *scale = scale_fn(log2_max, d_f32);
         }
     }
 
@@ -405,13 +441,13 @@ where
     let blocks_per_group = elements_per_group / gmat_block_size;
     let d_f32 = f32::from(d);
 
-    for g in 0..N {
+    for (g, scale) in scales.iter_mut().enumerate().take(N) {
         let start = g * blocks_per_group;
         let end = (start + blocks_per_group).min(gmat_blocks.len());
         let log2_max = log2_group_max(&gmat_blocks[start..end]);
 
         if d_f32 > 1e-10 && log2_max.is_finite() {
-            scales[g] = scale_fn(log2_max, d_f32);
+            *scale = scale_fn(log2_max, d_f32);
         }
     }
 

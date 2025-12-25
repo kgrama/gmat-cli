@@ -10,7 +10,7 @@
 
 use half::f16;
 
-use super::utils::{group_max_abs, pack_nibble};
+use super::utils::{group_max_abs, iter_group_elements, pack_nibble};
 use crate::blocks::AnyBlock;
 
 //=============================================================================
@@ -109,10 +109,10 @@ fn find_nearest_iq4nl(target: f32) -> u8 {
     }
 }
 
-/// Find the IQ4_NL index using log2 domain binary search
-/// Avoids exp2 calls by working directly in log2 space
+/// Find the IQ4_NL index using log2 domain binary search.
+/// Avoids exp2 calls by working directly in log2 space.
 #[inline]
-fn find_nearest_iq4nl_log2(log2_mag: f32, log2_scale: f32) -> u8 {
+pub(super) fn find_nearest_iq4nl_log2(log2_mag: f32, log2_scale: f32) -> u8 {
     let normalized = log2_mag - log2_scale;
 
     // Binary search in log2 thresholds
@@ -379,12 +379,14 @@ pub fn encode_iquant_block(
             0.0
         };
 
-        let group_start = g * blocks_per_grp;
-        let group_end = (group_start + blocks_per_grp).min(gmat_blocks.len());
+        // Fast path: IQ4_NL with 8-bit GMAT blocks using cached LUT
+        // This path handles blocks that have raw_e1m7_data available
+        if !config.has_group_scales {
+            let group_start = g * blocks_per_grp;
+            let group_end = (group_start + blocks_per_grp).min(gmat_blocks.len());
+            let mut all_handled = true;
 
-        for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
-            // Fast path: IQ4_NL with 8-bit GMAT blocks using cached LUT
-            if !config.has_group_scales {
+            for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
                 if let Some((mags, shift_map, _signs, scale_log)) = blk.raw_e1m7_data() {
                     // Compute base offset for this block
                     let base_offset = if d_f32.abs() > 1e-10 {
@@ -404,32 +406,36 @@ pub fn encode_iquant_block(
                     };
 
                     // Direct LUT lookup for all elements
-                    for idx in 0..gmat_block_size {
+                    for (idx, &mag) in mags.iter().enumerate().take(gmat_block_size) {
                         let lut_idx =
-                            mags[idx] as usize + if (shift_map >> idx) & 1 != 0 { 256 } else { 0 };
+                            mag as usize + if (shift_map >> idx) & 1 != 0 { 256 } else { 0 };
                         let q = lut[lut_idx];
                         let elem_idx =
                             g * config.elements_per_group + blk_idx * gmat_block_size + idx;
                         pack_nibble(output, config.quants_offset, elem_idx, q);
                     }
-                    continue; // Skip fallback path
+                } else {
+                    all_handled = false;
+                    break;
                 }
             }
 
-            // Fallback path: use log_iter for 4-bit blocks or when raw data unavailable
-            for (idx, log2_mag, sign) in blk.log_iter() {
-                // Use log2 domain binary search - no exp2 calls in inner loop
-                let q = if sign == 1 {
-                    // Negative values map to indices 0-7
-                    find_nearest_iq4nl_log2(log2_mag, log2_scale)
-                } else {
-                    // Positive values map to indices 8-15
-                    find_nearest_iq4nl_log2(log2_mag, log2_scale)
-                };
-
-                let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
-                pack_nibble(output, config.quants_offset, elem_idx, q);
+            if all_handled {
+                continue; // Skip fallback path for this group
             }
+        }
+
+        // Fallback path: use iter_group_elements for 4-bit blocks or when raw data unavailable
+        for (elem_idx, log2_mag, _sign) in iter_group_elements(
+            gmat_blocks,
+            g,
+            blocks_per_grp,
+            gmat_block_size,
+            config.elements_per_group,
+        ) {
+            // Use log2 domain binary search - no exp2 calls in inner loop
+            let q = find_nearest_iq4nl_log2(log2_mag, log2_scale);
+            pack_nibble(output, config.quants_offset, elem_idx, q);
         }
     }
 }

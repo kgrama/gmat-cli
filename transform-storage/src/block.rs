@@ -60,8 +60,8 @@ pub trait Block: Sized + Clone {
     #[inline]
     fn decode_into(&self, out: &mut [f32]) {
         debug_assert!(out.len() >= Self::SIZE);
-        for i in 0..Self::SIZE {
-            out[i] = self.decode(i);
+        for (i, out_elem) in out.iter_mut().enumerate().take(Self::SIZE) {
+            *out_elem = self.decode(i);
         }
     }
 

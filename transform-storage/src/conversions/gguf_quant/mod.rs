@@ -3,6 +3,7 @@
 //! Export GMAT log-domain blocks to standard GGUF format for llama.cpp inference.
 //! All output is 100% GGUF-compliant - trellis optimization only affects scale selection.
 
+mod compute;
 mod iquant;
 mod kquant;
 mod legacy;

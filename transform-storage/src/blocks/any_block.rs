@@ -5,6 +5,27 @@ use super::unified_block::{EncodeHelper, UnifiedBlock};
 use half::f16;
 use std::io::{Read, Result, Write};
 
+/// Dispatch macro for matching all AnyBlock variants with a uniform operation.
+///
+/// Usage:
+/// ```ignore
+/// match_block!(self, b => { b.some_method() })
+/// ```
+macro_rules! match_block {
+    ($self:expr, $b:ident => $body:expr) => {
+        match $self {
+            AnyBlock::B8x4($b) => $body,
+            AnyBlock::B8x8($b) => $body,
+            AnyBlock::B16x4($b) => $body,
+            AnyBlock::B16x8($b) => $body,
+            AnyBlock::DualRow8x4($b) => $body,
+            AnyBlock::DualRow8x8($b) => $body,
+            AnyBlock::DualRow16x4($b) => $body,
+            AnyBlock::DualRow16x8($b) => $body,
+        }
+    };
+}
+
 /// Internal trait for unified block operations across all configurations.
 /// This enables generic functions to work with any UnifiedBlock variant.
 pub(crate) trait UnifiedBlockOps {
@@ -140,16 +161,7 @@ pub enum AnyBlock {
 impl AnyBlock {
     /// Get a reference to the inner block as a trait object
     fn inner(&self) -> &dyn UnifiedBlockOps {
-        match self {
-            Self::B8x4(b) => b,
-            Self::B8x8(b) => b,
-            Self::B16x4(b) => b,
-            Self::B16x8(b) => b,
-            Self::DualRow8x4(b) => b,
-            Self::DualRow8x8(b) => b,
-            Self::DualRow16x4(b) => b,
-            Self::DualRow16x8(b) => b,
-        }
+        match_block!(self, b => b)
     }
 
     /// Get the block size (number of elements per row)
@@ -287,16 +299,7 @@ impl AnyBlock {
 
     /// Write to output
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<()> {
-        match self {
-            Self::B8x4(b) => b.write_to(w),
-            Self::B8x8(b) => b.write_to(w),
-            Self::B16x4(b) => b.write_to(w),
-            Self::B16x8(b) => b.write_to(w),
-            Self::DualRow8x4(b) => b.write_to(w),
-            Self::DualRow8x8(b) => b.write_to(w),
-            Self::DualRow16x4(b) => b.write_to(w),
-            Self::DualRow16x8(b) => b.write_to(w),
-        }
+        match_block!(self, b => b.write_to(w))
     }
 
     /// Read from input with known format
@@ -338,16 +341,7 @@ impl AnyBlock {
             row,
             max_row
         );
-        match self {
-            Self::B8x4(b) => Box::new(b.row_iter(row)),
-            Self::B8x8(b) => Box::new(b.row_iter(row)),
-            Self::B16x4(b) => Box::new(b.row_iter(row)),
-            Self::B16x8(b) => Box::new(b.row_iter(row)),
-            Self::DualRow8x4(b) => Box::new(b.row_iter(row)),
-            Self::DualRow8x8(b) => Box::new(b.row_iter(row)),
-            Self::DualRow16x4(b) => Box::new(b.row_iter(row)),
-            Self::DualRow16x8(b) => Box::new(b.row_iter(row)),
-        }
+        match_block!(self, b => Box::new(b.row_iter(row)))
     }
 
     /// Iterator over (index, log2_magnitude, sign) tuples for a specific row
@@ -361,22 +355,41 @@ impl AnyBlock {
             row,
             max_row
         );
-        match self {
-            Self::B8x4(b) => Box::new(b.log_row_iter(row)),
-            Self::B8x8(b) => Box::new(b.log_row_iter(row)),
-            Self::B16x4(b) => Box::new(b.log_row_iter(row)),
-            Self::B16x8(b) => Box::new(b.log_row_iter(row)),
-            Self::DualRow8x4(b) => Box::new(b.log_row_iter(row)),
-            Self::DualRow8x8(b) => Box::new(b.log_row_iter(row)),
-            Self::DualRow16x4(b) => Box::new(b.log_row_iter(row)),
-            Self::DualRow16x8(b) => Box::new(b.log_row_iter(row)),
-        }
+        match_block!(self, b => Box::new(b.log_row_iter(row)))
     }
 
     /// Iterator over (index, log2_magnitude, sign) tuples
     /// Note: For DualRow variants, iterates row 0 only.
     pub fn log_iter(&self) -> Box<dyn Iterator<Item = (usize, f32, u8)> + '_> {
         self.log_row_iter(0)
+    }
+
+    /// Visit each log element without Box allocation.
+    /// Closure receives (idx, log2_mag, sign) for each non-zero element.
+    /// Note: For DualRow variants, iterates row 0 only.
+    #[inline]
+    pub fn for_each_log<F>(&self, mut f: F)
+    where
+        F: FnMut(usize, f32, u8),
+    {
+        match_block!(self, b => {
+            for (idx, log2_mag, sign) in b.log_row_iter(0) {
+                f(idx, log2_mag, sign);
+            }
+        })
+    }
+
+    /// Visit each log element for a specific row (for DualRow blocks).
+    #[inline]
+    pub fn for_each_log_row<F>(&self, row: usize, mut f: F)
+    where
+        F: FnMut(usize, f32, u8),
+    {
+        match_block!(self, b => {
+            for (idx, log2_mag, sign) in b.log_row_iter(row) {
+                f(idx, log2_mag, sign);
+            }
+        })
     }
 
     /// Get raw e1m7 magnitude data for LUT-based quantization.

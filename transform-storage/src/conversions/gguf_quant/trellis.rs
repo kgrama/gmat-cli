@@ -10,7 +10,7 @@
 
 use half::f16;
 
-use super::utils::gmat_blocks_per_group;
+use super::utils::{gmat_blocks_per_group, iter_group_elements};
 use crate::blocks::AnyBlock;
 
 /// Trellis-optimized group scale selection for K-quants.
@@ -44,14 +44,14 @@ pub fn optimize_group_scales_trellis(
     //=========================================================================
     let mut errors = [[0.0f32; 64]; 8];
 
-    for g in 0..8 {
-        let block_start = g * blocks_per_grp;
-        let block_end = (block_start + blocks_per_grp).min(gmat_blocks.len());
+    // elements_per_group is 32 for K-quants (256 elements / 8 groups)
+    let elements_per_group = 32;
 
-        for scale_idx in 0..64 {
+    for (g, group_errors) in errors.iter_mut().enumerate() {
+        for (scale_idx, error) in group_errors.iter_mut().enumerate() {
             let scale = f32::from(d) * (scale_idx as f32);
             if scale < 1e-10 {
-                errors[g][scale_idx] = f32::INFINITY;
+                *error = f32::INFINITY;
                 continue;
             }
 
@@ -59,38 +59,37 @@ pub fn optimize_group_scales_trellis(
             let _min = f32::from(dmin) * (scale_idx as f32);
             let _inv_scale = 1.0 / scale;
 
-            for (local_blk, blk) in gmat_blocks[block_start..block_end].iter().enumerate() {
-                for (idx, log2_mag, _sign) in blk.log_iter() {
-                    let elem_idx = local_blk * gmat_block_size + idx;
-                    let global_idx = g * 32 + elem_idx;
+            // Log-domain constants for this scale
+            let log2_d = f32::from(d).log2();
+            let log2_scale_factor = (scale_idx as f32).log2();
 
-                    // Log-domain error: error ≈ |log2_mag - log2_d - log2_scale_factor - log2_q|
-                    // This avoids N×exp2 calls in the DP inner loop
-                    let log2_d = f32::from(d).log2();
-                    let log2_scale_factor = (scale_idx as f32).log2();
+            for (elem_idx, log2_mag, _sign) in iter_group_elements(
+                gmat_blocks, g, blocks_per_grp, gmat_block_size, elements_per_group
+            ) {
+                // Log-domain error: error ≈ |log2_mag - log2_d - log2_scale_factor - log2_q|
+                // This avoids N×exp2 calls in the DP inner loop
 
-                    // Estimate quantized index in log-domain
-                    // For ideal quantization: value = scale * q - min
-                    // In log-domain: log2_mag ≈ log2_d + log2_scale_factor + log2_q (ignoring min offset)
-                    // So: log2_q ≈ log2_mag - log2_d - log2_scale_factor
-                    let log2_q_ideal = log2_mag - log2_d - log2_scale_factor;
+                // Estimate quantized index in log-domain
+                // For ideal quantization: value = scale * q - min
+                // In log-domain: log2_mag ≈ log2_d + log2_scale_factor + log2_q (ignoring min offset)
+                // So: log2_q ≈ log2_mag - log2_d - log2_scale_factor
+                let log2_q_ideal = log2_mag - log2_d - log2_scale_factor;
 
-                    // Clamp to valid quantization range [0, 15] in log-domain
-                    // log2(1) = 0, log2(15) ≈ 3.9
-                    let log2_q = log2_q_ideal.clamp(0.0, 3.91);
+                // Clamp to valid quantization range [0, 15] in log-domain
+                // log2(1) = 0, log2(15) ≈ 3.9
+                let log2_q = log2_q_ideal.clamp(0.0, 3.91);
 
-                    // Pure log-domain error metric
-                    let err = (log2_q_ideal - log2_q).abs();
+                // Pure log-domain error metric
+                let err = (log2_q_ideal - log2_q).abs();
 
-                    // Apply importance weighting if provided
-                    let weight = activation_weights
-                        .and_then(|w| w.get(global_idx))
-                        .copied()
-                        .unwrap_or(1.0);
-                    total_err += weight * err;
-                }
+                // Apply importance weighting if provided
+                let weight = activation_weights
+                    .and_then(|w| w.get(elem_idx))
+                    .copied()
+                    .unwrap_or(1.0);
+                total_err += weight * err;
             }
-            errors[g][scale_idx] = total_err;
+            *error = total_err;
         }
     }
 
@@ -190,6 +189,7 @@ pub fn optimize_group_scales_trellis(
 /// * `gamma` - Cross-row coupling penalty (encourages similar scales)
 /// * `gmat_block_size` - Size of each GMAT block
 #[allow(dead_code)] // Not yet implemented
+#[allow(clippy::too_many_arguments)]
 pub fn optimize_group_scales_dual(
     _row0_blocks: &[&AnyBlock],
     _row1_blocks: &[&AnyBlock],

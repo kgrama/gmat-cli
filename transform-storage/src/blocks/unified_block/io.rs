@@ -37,8 +37,8 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
     pub fn read_from<R: Read>(r: &mut R) -> Result<Self> {
         // Read zero_maps for all rows
         let mut zero_map = [C::Mask::default(); 2];
-        for i in 0..ROWS {
-            zero_map[i] = C::Mask::read_le(r)?;
+        for zm in zero_map.iter_mut().take(ROWS) {
+            *zm = C::Mask::read_le(r)?;
         }
 
         // Check if empty

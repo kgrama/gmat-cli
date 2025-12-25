@@ -5,9 +5,10 @@
 
 use half::f16;
 
+use super::compute;
 use super::utils::{
-    build_log2_thresholds, compute_scale_from_log2_max, log2_group_max, log2_group_stats,
-    log2_quantize,
+    build_log2_thresholds, compute_scale_from_log2_max, iter_block_elements, log2_group_max,
+    log2_group_stats,
 };
 use crate::blocks::AnyBlock;
 
@@ -194,21 +195,9 @@ pub fn encode_legacy_block(config: &LegacyConfig, gmat_blocks: &[&AnyBlock], out
 #[inline]
 fn encode_8bit(gmat_blocks: &[&AnyBlock], block_size: usize, inv_scale: f32, out: &mut [u8]) {
     let log2_scale = inv_scale.log2();
-    for (blk_idx, blk) in gmat_blocks.iter().enumerate() {
-        let base = blk_idx * block_size;
-        for (idx, log2_mag, sign) in blk.log_iter() {
-            let global_idx = base + idx;
-            if global_idx < 32 {
-                let q_mag = super::utils::fast_exp2(log2_mag - log2_scale)
-                    .round()
-                    .clamp(0.0, 127.0);
-                let q = if sign == 1 {
-                    -(q_mag as i8)
-                } else {
-                    q_mag as i8
-                };
-                out[global_idx] = q as u8;
-            }
+    for (idx, log2_mag, sign) in iter_block_elements(gmat_blocks, block_size, 0) {
+        if idx < 32 {
+            out[idx] = compute::compute_q8_0(log2_mag, sign, log2_scale);
         }
     }
 }
@@ -236,28 +225,16 @@ fn encode_4bit(
     if offset != 0 {
         // Symmetric (Q4_0): use fast_exp2 with log2 formula
         // q = round(exp2(log2_mag - log2_scale)) * sign + offset
-        for (blk_idx, blk) in gmat_blocks.iter().enumerate() {
-            let base = blk_idx * block_size;
-            for (idx, log2_mag, sign) in blk.log_iter() {
-                let global_idx = base + idx;
-                if global_idx < 32 {
-                    let q_mag = super::utils::fast_exp2(log2_mag - log2_scale)
-                        .round()
-                        .clamp(0.0, 7.0);
-                    let q_signed = if sign == 1 {
-                        -(q_mag as i8)
-                    } else {
-                        q_mag as i8
-                    };
-                    let q = (q_signed + offset) as u8;
+        for (idx, log2_mag, sign) in iter_block_elements(gmat_blocks, block_size, 0) {
+            if idx < 32 {
+                let q = compute::compute_q4_0(log2_mag, sign, log2_scale, offset);
 
-                    // Pack nibble
-                    let byte_idx = global_idx / 2;
-                    if global_idx.is_multiple_of(2) {
-                        out[byte_idx] = (out[byte_idx] & 0xF0) | (q & 0x0F);
-                    } else {
-                        out[byte_idx] = (out[byte_idx] & 0x0F) | ((q & 0x0F) << 4);
-                    }
+                // Pack nibble
+                let byte_idx = idx / 2;
+                if idx.is_multiple_of(2) {
+                    out[byte_idx] = (out[byte_idx] & 0xF0) | (q & 0x0F);
+                } else {
+                    out[byte_idx] = (out[byte_idx] & 0x0F) | ((q & 0x0F) << 4);
                 }
             }
         }
@@ -266,26 +243,16 @@ fn encode_4bit(
         // Build log2 thresholds once for the block (O(16) work)
         let log2_thresholds = build_log2_thresholds::<16>(-log2_scale);
 
-        for (blk_idx, blk) in gmat_blocks.iter().enumerate() {
-            let base = blk_idx * block_size;
-            for (idx, log2_mag, sign) in blk.log_iter() {
-                let global_idx = base + idx;
-                if global_idx < 32 {
-                    // Log2-domain quantization: no exp2 per element
-                    // Negative values map to 0
-                    let q = if sign == 1 {
-                        0u8
-                    } else {
-                        log2_quantize::<16>(log2_mag, &log2_thresholds)
-                    };
+        for (idx, log2_mag, sign) in iter_block_elements(gmat_blocks, block_size, 0) {
+            if idx < 32 {
+                let q = compute::compute_q4_1(log2_mag, sign, &log2_thresholds);
 
-                    // Pack nibble
-                    let byte_idx = global_idx / 2;
-                    if global_idx.is_multiple_of(2) {
-                        out[byte_idx] = (out[byte_idx] & 0xF0) | (q & 0x0F);
-                    } else {
-                        out[byte_idx] = (out[byte_idx] & 0x0F) | ((q & 0x0F) << 4);
-                    }
+                // Pack nibble
+                let byte_idx = idx / 2;
+                if idx.is_multiple_of(2) {
+                    out[byte_idx] = (out[byte_idx] & 0xF0) | (q & 0x0F);
+                } else {
+                    out[byte_idx] = (out[byte_idx] & 0x0F) | ((q & 0x0F) << 4);
                 }
             }
         }
@@ -296,6 +263,7 @@ fn encode_4bit(
 /// Symmetric (Q5_0): uses fast_exp2(log2_mag - log2_scale) - single exp2 per element
 /// Asymmetric (Q5_1): uses log2-domain LUT - no per-element exp2
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn encode_5bit(
     gmat_blocks: &[&AnyBlock],
     block_size: usize,
@@ -322,24 +290,12 @@ fn encode_5bit(
     if offset != 0 {
         // Symmetric (Q5_0): use fast_exp2 with log2 formula
         // q = round(exp2(log2_mag - log2_scale)) * sign + offset
-        for (blk_idx, blk) in gmat_blocks.iter().enumerate() {
-            let base = blk_idx * block_size;
-            for (idx, log2_mag, sign) in blk.log_iter() {
-                let global_idx = base + idx;
-                if global_idx < 32 {
-                    let q_mag = super::utils::fast_exp2(log2_mag - log2_scale)
-                        .round()
-                        .clamp(0.0, 15.0);
-                    let q_signed = if sign == 1 {
-                        -(q_mag as i8)
-                    } else {
-                        q_mag as i8
-                    };
-                    let q = (q_signed + offset) as u8;
+        for (idx, log2_mag, sign) in iter_block_elements(gmat_blocks, block_size, 0) {
+            if idx < 32 {
+                let q = compute::compute_q5_0(log2_mag, sign, log2_scale, offset);
 
-                    set_high_bit(out, high_offset, global_idx, q);
-                    set_low_nibble(out, low_offset, global_idx, q);
-                }
+                set_high_bit(out, high_offset, idx, q);
+                set_low_nibble(out, low_offset, idx, q);
             }
         }
     } else {
@@ -347,22 +303,12 @@ fn encode_5bit(
         // Build log2 thresholds once for the block (O(32) work)
         let log2_thresholds = build_log2_thresholds::<32>(-log2_scale);
 
-        for (blk_idx, blk) in gmat_blocks.iter().enumerate() {
-            let base = blk_idx * block_size;
-            for (idx, log2_mag, sign) in blk.log_iter() {
-                let global_idx = base + idx;
-                if global_idx < 32 {
-                    // Log2-domain quantization: no exp2 per element
-                    // Negative values map to 0
-                    let q = if sign == 1 {
-                        0u8
-                    } else {
-                        log2_quantize::<32>(log2_mag, &log2_thresholds)
-                    };
+        for (idx, log2_mag, sign) in iter_block_elements(gmat_blocks, block_size, 0) {
+            if idx < 32 {
+                let q = compute::compute_q5_1(log2_mag, sign, &log2_thresholds);
 
-                    set_high_bit(out, high_offset, global_idx, q);
-                    set_low_nibble(out, low_offset, global_idx, q);
-                }
+                set_high_bit(out, high_offset, idx, q);
+                set_low_nibble(out, low_offset, idx, q);
             }
         }
     }
