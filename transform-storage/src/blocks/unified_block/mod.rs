@@ -41,6 +41,24 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
         }
     }
 
+    /// Create a block from raw components (for transpose operations)
+    pub fn from_components(
+        scale_log: f16,
+        zero_map: [C::Mask; 2],
+        signs: [C::Mask; 2],
+        octave_shift: [C::Mask; 2],
+        magnitudes: [[u8; 16]; 2],
+    ) -> Self {
+        Self {
+            scale_log,
+            zero_map,
+            signs,
+            octave_shift,
+            magnitudes,
+            _phantom: PhantomData,
+        }
+    }
+
     /// Encode single row (for ROWS=1)
     pub fn encode_single(values: &[f32]) -> Self {
         let enc = C::do_encode(values);

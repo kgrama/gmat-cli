@@ -4,6 +4,7 @@ mod traits;
 mod configs;
 mod unified_block;
 mod any_block;
+mod traversal;
 
 // Re-export traits
 pub use traits::{ElementMask, EncodingStrategy, E0M4, E1M7};
@@ -23,6 +24,9 @@ pub use unified_block::{
 
 // Re-export any_block types
 pub use any_block::{BlockFormat, AnyBlock};
+
+// Re-export traversal types
+pub use traversal::{Axis, TraversalConfig, BlockTraversal, BlockTraversable, transpose_tile};
 
 // Keep backwards compatibility - re-export GenericBlock as alias
 pub use unified_block::UnifiedBlock as GenericBlock;

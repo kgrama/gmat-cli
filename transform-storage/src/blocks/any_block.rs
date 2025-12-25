@@ -378,4 +378,135 @@ impl AnyBlock {
             _ => None,
         }
     }
+
+    /// Create an empty block of the given format
+    pub fn new_empty(format: BlockFormat) -> Self {
+        match format {
+            BlockFormat::B8x4 => Self::B8x4(UnifiedBlock::new_empty()),
+            BlockFormat::B8x8 => Self::B8x8(UnifiedBlock::new_empty()),
+            BlockFormat::B16x4 => Self::B16x4(UnifiedBlock::new_empty()),
+            BlockFormat::B16x8 => Self::B16x8(UnifiedBlock::new_empty()),
+            BlockFormat::DualRow8x4 => Self::DualRow8x4(UnifiedBlock::new_empty()),
+            BlockFormat::DualRow8x8 => Self::DualRow8x8(UnifiedBlock::new_empty()),
+            BlockFormat::DualRow16x4 => Self::DualRow16x4(UnifiedBlock::new_empty()),
+            BlockFormat::DualRow16x8 => Self::DualRow16x8(UnifiedBlock::new_empty()),
+        }
+    }
+
+    /// Encode a block from log2 components (scale, zero_map, signs, offsets).
+    ///
+    /// This encodes directly from log-space data without f32 magnitude conversion.
+    /// Offsets are relative to scale_log: actual_log2 = scale_log + offset
+    pub fn encode_from_log_components(
+        format: BlockFormat,
+        scale_log: half::f16,
+        zero_map: u16,
+        signs: u16,
+        offsets: &[f32],
+    ) -> Self {
+        use crate::block::set_packed_nibble;
+
+        if zero_map == 0 {
+            return Self::new_empty(format);
+        }
+
+        // Determine encoding parameters based on format
+        let (shift_threshold, shift_amount, use_4bit, size) = match format {
+            BlockFormat::B8x4 | BlockFormat::DualRow8x4 => (8.0, 8.0, true, 8),
+            BlockFormat::B16x4 | BlockFormat::DualRow16x4 => (8.0, 8.0, true, 16),
+            BlockFormat::B8x8 | BlockFormat::DualRow8x8 => (128.0, 128.0, false, 8),
+            BlockFormat::B16x8 | BlockFormat::DualRow16x8 => (128.0, 128.0, false, 16),
+        };
+
+        let mut magnitudes = [0u8; 16];
+        let mut octave_shift: u16 = 0;
+
+        for i in 0..size {
+            if (zero_map >> i) & 1 == 1 {
+                let offset = offsets[i];
+                let (stored_offset, needs_shift) = if offset >= shift_threshold {
+                    (offset - shift_amount, true)
+                } else {
+                    (offset, false)
+                };
+
+                if needs_shift {
+                    octave_shift |= 1 << i;
+                }
+
+                let encoded = if use_4bit {
+                    // E0M4 encoding
+                    (stored_offset.round() as u8).min(15)
+                } else {
+                    // E1M7 encoding
+                    stored_offset.round() as u8
+                };
+
+                if use_4bit {
+                    set_packed_nibble(&mut magnitudes, i, encoded);
+                } else {
+                    magnitudes[i] = encoded;
+                }
+            }
+        }
+
+        match format {
+            BlockFormat::B8x4 => Self::B8x4(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map as u8, 0],
+                [signs as u8, 0],
+                [octave_shift as u8, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::B8x8 => Self::B8x8(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map as u8, 0],
+                [signs as u8, 0],
+                [octave_shift as u8, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::B16x4 => Self::B16x4(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map, 0],
+                [signs, 0],
+                [octave_shift, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::B16x8 => Self::B16x8(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map, 0],
+                [signs, 0],
+                [octave_shift, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::DualRow8x4 => Self::DualRow8x4(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map as u8, 0],
+                [signs as u8, 0],
+                [octave_shift as u8, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::DualRow8x8 => Self::DualRow8x8(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map as u8, 0],
+                [signs as u8, 0],
+                [octave_shift as u8, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::DualRow16x4 => Self::DualRow16x4(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map, 0],
+                [signs, 0],
+                [octave_shift, 0],
+                [magnitudes, [0; 16]],
+            )),
+            BlockFormat::DualRow16x8 => Self::DualRow16x8(UnifiedBlock::from_components(
+                scale_log,
+                [zero_map, 0],
+                [signs, 0],
+                [octave_shift, 0],
+                [magnitudes, [0; 16]],
+            )),
+        }
+    }
 }

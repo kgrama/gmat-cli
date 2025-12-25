@@ -1,6 +1,6 @@
 //! GraphMatrix - Block-based sparse matrix storage.
 
-use crate::blocks::{AnyBlock, BlockFormat};
+use crate::blocks::{AnyBlock, BlockFormat, BlockTraversal, TraversalConfig, transpose_tile};
 use candle_core::{Tensor, Result};
 use crate::formats::GmatMetadata;
 
@@ -52,6 +52,37 @@ impl GraphMatrix {
     #[inline]
     fn row_in_block(&self, row: usize) -> usize {
         if self.format.is_dual_row() { row % 2 } else { 0 }
+    }
+
+    /// Get traversal configuration for this matrix.
+    #[inline]
+    pub(crate) fn traversal_config(&self) -> TraversalConfig {
+        TraversalConfig::new(
+            self.shape,
+            self.format.block_size(),
+            self.format.is_dual_row(),
+        )
+    }
+
+    /// Create a row traversal for the given row index.
+    #[inline]
+    fn row_traversal(&self, row: usize) -> BlockTraversal<'_> {
+        BlockTraversal::row(&self.row_blocks, self.traversal_config(), row)
+    }
+
+    /// Create a column traversal for the given column index.
+    /// Requires column index to be built.
+    #[inline]
+    fn col_traversal(&self, col: usize) -> BlockTraversal<'_> {
+        let col_blocks = self.col_blocks.as_ref()
+            .expect("Column index not built. Call build_col_index() first.");
+        // For column traversal, we need a transposed config
+        let col_config = TraversalConfig::new(
+            (self.shape.1, self.shape.0), // swap rows/cols for column blocks
+            self.format.block_size(),
+            false, // column blocks are not dual-row
+        );
+        BlockTraversal::col(col_blocks, col_config, col)
     }
 
     // ========================================================================
@@ -135,6 +166,7 @@ impl GraphMatrix {
 
     /// Get block format.
     #[inline]
+    #[allow(dead_code)]  // Used by config/ modules
     pub(crate) fn format(&self) -> BlockFormat {
         self.format
     }
@@ -248,48 +280,16 @@ impl GraphMatrix {
 
     /// Compute log2 center (geometric median) for a specific row.
     pub fn row_log2_center(&self, row: usize) -> f32 {
-        let rows = self.shape.0;
-        assert!(row < rows);
-
-        let blocks_per_row = self.blocks_per_row();
-        let block_offset = self.row_block_offset(row);
-        let row_in_block = self.row_in_block(row);
-        // Pre-allocate for estimated nnz per row (cols / sparsity estimate, capped at cols)
-        let cols = self.shape.1;
-        let mut log2_vals = Vec::with_capacity(cols);
-
-        for block_idx in 0..blocks_per_row {
-            let block = &self.row_blocks[block_offset + block_idx];
-            for (_, log_mag, _) in block.log_row_iter(row_in_block) {
-                log2_vals.push(log_mag);
-            }
-        }
-
+        assert!(row < self.shape.0, "Row {} out of bounds", row);
+        let mut log2_vals = self.row_traversal(row).collect_log_magnitudes();
         stats::compute_median(&mut log2_vals)
     }
 
     /// Compute log2 center (geometric median) for a specific column.
     /// Requires column index to be built.
     pub fn col_log2_center(&self, col: usize) -> f32 {
-        let (rows, cols) = self.shape;
-        assert!(col < cols);
-
-        let col_blocks = self.col_blocks.as_ref()
-            .expect("Column index not built. Call build_col_index() first.");
-
-        let block_size = self.format.block_size();
-        let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
-        let col_offset = col * blocks_per_col;
-        // Pre-allocate for estimated nnz per column (capped at rows)
-        let mut log2_vals = Vec::with_capacity(rows);
-
-        for block_idx in 0..blocks_per_col {
-            let block = &col_blocks[col_offset + block_idx];
-            for (_, log_mag, _) in block.log_iter() {
-                log2_vals.push(log_mag);
-            }
-        }
-
+        assert!(col < self.shape.1, "Column {} out of bounds", col);
+        let mut log2_vals = self.col_traversal(col).collect_log_magnitudes();
         stats::compute_median(&mut log2_vals)
     }
 
@@ -303,50 +303,9 @@ impl GraphMatrix {
     ///
     /// # Panics
     /// Panics if row >= self.shape.0
-    pub fn row_iter(&self, row: usize) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
-        let (rows, cols) = self.shape;
-        assert!(row < rows, "Row index {} out of bounds for matrix with {} rows", row, rows);
-        
-        let block_size = self.format.block_size();
-        let blocks_per_row = cols.div_ceil(block_size);
-        
-        if self.format.is_dual_row() {
-            // For dual-row: find which block pair this row belongs to
-            let row_pair = row / 2;
-            let row_in_block = row % 2;
-            let block_offset = row_pair * blocks_per_row;
-            
-            Box::new((0..blocks_per_row).flat_map(move |block_idx| {
-                let block = &self.row_blocks[block_offset + block_idx];
-                let block_col_start = block_idx * block_size;
-                
-                block.row_iter(row_in_block).filter_map(move |(local_idx, value)| {
-                    let col = block_col_start + local_idx;
-                    if col < cols {
-                        Some((col, value))
-                    } else {
-                        None
-                    }
-                })
-            }))
-        } else {
-            // For single-row: standard indexing
-            let row_offset = row * blocks_per_row;
-            
-            Box::new((0..blocks_per_row).flat_map(move |block_idx| {
-                let block = &self.row_blocks[row_offset + block_idx];
-                let block_col_start = block_idx * block_size;
-                
-                block.iter().filter_map(move |(local_idx, value)| {
-                    let col = block_col_start + local_idx;
-                    if col < cols {
-                        Some((col, value))
-                    } else {
-                        None
-                    }
-                })
-            }))
-        }
+    pub fn row_iter(&self, row: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
+        assert!(row < self.shape.0, "Row index {} out of bounds for matrix with {} rows", row, self.shape.0);
+        self.row_traversal(row).value_iter()
     }
 
     /// Iterate over all blocks in row-major order.
@@ -367,60 +326,14 @@ impl GraphMatrix {
     /// # Panics
     /// - Panics if col >= self.shape.1
     /// - Panics if column index has not been built (call build_col_index first)
-    pub fn col_iter(&self, col: usize) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
-        let (rows, cols) = self.shape;
-        assert!(col < cols, "Column index {} out of bounds for matrix with {} columns", col, cols);
-
-        let col_blocks = self.col_blocks.as_ref()
-            .expect("Column index not built. Call build_col_index() first.");
-
-        let block_size = self.format.block_size();
-        let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
-        let col_offset = col * blocks_per_col;
-        
-        Box::new((0..blocks_per_col)
-            .flat_map(move |block_idx| {
-                let block = &col_blocks[col_offset + block_idx];
-                let block_row_start = block_idx * block_size;
-                
-                block.iter().filter_map(move |(local_idx, value)| {
-                    let row = block_row_start + local_idx;
-                    if row < rows {
-                        Some((row, value))
-                    } else {
-                        None
-                    }
-                })
-            }))
+    pub fn col_iter(&self, col: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
+        assert!(col < self.shape.1, "Column index {} out of bounds for matrix with {} columns", col, self.shape.1);
+        self.col_traversal(col).value_iter()
     }
 
     /// Helper: decode a row from blocks into a buffer.
     pub(crate) fn decode_row_to_buffer(&self, row: usize, buffer: &mut [f32]) {
-        let cols = self.shape.1;
-        let block_size = self.format.block_size();
-        let blocks_per_row = self.blocks_per_row();
-        let block_offset = self.row_block_offset(row);
-        let block_row = self.row_in_block(row);
-
-        for block_idx in 0..blocks_per_row {
-            let block = &self.row_blocks[block_offset + block_idx];
-            let block_start = block_idx * block_size;
-            let block_end = (block_start + block_size).min(cols);
-
-            for local_idx in 0..(block_end - block_start) {
-                buffer[block_start + local_idx] = block.decode_row(block_row, local_idx);
-            }
-        }
-    }
-
-    /// Helper: encode a slice into a block using the matrix's format.
-    fn encode_block(&self, data: &[f32]) -> AnyBlock {
-        match self.format {
-            BlockFormat::B8x4 | BlockFormat::DualRow8x4 => AnyBlock::encode_8x4(data),
-            BlockFormat::B8x8 | BlockFormat::DualRow8x8 => AnyBlock::encode_8x8(data),
-            BlockFormat::B16x4 | BlockFormat::DualRow16x4 => AnyBlock::encode_16x4(data),
-            BlockFormat::B16x8 | BlockFormat::DualRow16x8 => AnyBlock::encode_16x8(data),
-        }
+        self.row_traversal(row).decode_to_buffer(buffer);
     }
 
     /// Build column index for fast column access.
@@ -435,44 +348,56 @@ impl GraphMatrix {
         }
 
         let block_size = self.format.block_size();
+        let blocks_per_row = layout::calc_blocks_per_row(cols, block_size);
         let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
 
-        // Pre-allocate output blocks
-        let mut encoded_col_blocks = Vec::with_capacity(cols * blocks_per_col);
+        // Pre-allocate output: cols columns, each with blocks_per_col blocks
+        let mut col_blocks = Vec::with_capacity(cols * blocks_per_col);
 
-        // Reusable buffer for one column (much smaller than rows*cols)
-        let mut col_buffer = vec![0.0f32; rows];
-        let mut block_data = [0.0f32; 16];
+        // Reusable buffers for tile processing
+        let mut tile_block_refs: Vec<&AnyBlock> = Vec::with_capacity(block_size);
+        let mut row_in_block_buf = vec![0usize; block_size];
+        let mut transposed_buf = vec![AnyBlock::new_empty(self.format); block_size];
+        let mut scratch = vec![(f32::NEG_INFINITY, 0u8); block_size * block_size];
+        let empty_block = AnyBlock::new_empty(self.format);
 
-        // For each column, gather values from all rows and encode blocks
-        for col in 0..cols {
-            // Gather column values by iterating through row blocks
-            col_buffer.fill(0.0);
+        // Process in tiles of block_size rows × block_size cols
+        for row_tile in 0..blocks_per_col {
+            let row_start = row_tile * block_size;
 
-            for row in 0..rows {
-                let block_offset = self.row_block_offset(row);
-                let block_idx = col / block_size;
-                let local_idx = col % block_size;
-                let block_row = self.row_in_block(row);
+            for col_tile in 0..blocks_per_row {
+                // Gather block_size row block references for this tile
+                tile_block_refs.clear();
+                for i in 0..block_size {
+                    let row = row_start + i;
+                    if row < rows {
+                        let block_offset = self.row_block_offset(row);
+                        tile_block_refs.push(&self.row_blocks[block_offset + col_tile]);
+                        row_in_block_buf[i] = self.row_in_block(row);
+                    } else {
+                        // Pad with empty blocks for partial tiles
+                        tile_block_refs.push(&empty_block);
+                        row_in_block_buf[i] = 0;
+                    }
+                }
 
-                let block = &self.row_blocks[block_offset + block_idx];
-                col_buffer[row] = block.decode_row(block_row, local_idx);
-            }
+                // Transpose tile: block_size row blocks → block_size column blocks
+                transpose_tile(&tile_block_refs, &row_in_block_buf, &mut transposed_buf, &mut scratch);
 
-            // Encode this column into blocks
-            for block_idx in 0..blocks_per_col {
-                let block_start = block_idx * block_size;
-                let block_end = (block_start + block_size).min(rows);
-                let block_len = block_end - block_start;
-
-                block_data[..block_size].fill(0.0);
-                block_data[..block_len].copy_from_slice(&col_buffer[block_start..block_end]);
-
-                encoded_col_blocks.push(self.encode_block(&block_data[..block_size]));
+                // Store transposed blocks in column-major order
+                let col_start = col_tile * block_size;
+                for local_col in 0..block_size {
+                    let col = col_start + local_col;
+                    if col < cols {
+                        col_blocks.push((col, row_tile, transposed_buf[local_col].clone()));
+                    }
+                }
             }
         }
 
-        self.col_blocks = Some(encoded_col_blocks);
+        // Reorder to column-major: col_blocks[col * blocks_per_col + block_idx]
+        col_blocks.sort_by_key(|(col, row_tile, _)| (*col, *row_tile));
+        self.col_blocks = Some(col_blocks.into_iter().map(|(_, _, b)| b).collect());
     }
 
     /// Drop the column index to free memory.

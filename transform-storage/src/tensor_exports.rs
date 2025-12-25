@@ -76,22 +76,15 @@ impl GraphMatrix {
     where
         F: FnMut(usize, usize, f32, u8),
     {
-        let (rows, cols) = self.shape();
-        let block_size = self.format().block_size();
-        let blocks_per_row = self.blocks_per_row();
-
+        use crate::blocks::BlockTraversal;
+        
+        let (rows, _) = self.shape();
+        let config = self.traversal_config();
+        
         for row in 0..rows {
-            let row_offset = self.row_block_offset(row);
-
-            for block_idx in 0..blocks_per_row {
-                let block = &self.row_blocks()[row_offset + block_idx];
-                let block_col_start = block_idx * block_size;
-                for (local_idx, log_mag, sign) in block.log_iter() {
-                    let col = block_col_start + local_idx;
-                    if col < cols {
-                        visitor(row, col, log_mag, sign);
-                    }
-                }
+            let traversal = BlockTraversal::row(self.row_blocks(), config, row);
+            for (col, log_mag, sign) in traversal.log_iter() {
+                visitor(row, col, log_mag, sign);
             }
         }
     }
