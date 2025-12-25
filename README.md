@@ -66,14 +66,28 @@ See the [wiki](wiki/Home.md) for detailed documentation:
 - [Export Command](wiki/Export-Command.md)
 - [Configuration Files](wiki/Configuration-Files.md)
 
-## Example
+## Examples
 
-The `example/tiny_llm` directory contains a complete workflow:
+### Tiny LLM (Quick Start)
+The `example/tiny_llm` directory contains a complete workflow with a small model:
 ```
 tiny_llm.safetensors  → import_config.json → model.gmat/
                                               ↓
                         export_config.json → tiny_llm.gguf
 ```
+
+### Kimi2-VL (Production Scale)
+The `example/kimi2` directory demonstrates processing a 16B MoE vision-language model:
+
+| Property | Value |
+|----------|-------|
+| Model | Kimi2-VL (moonshotai/Kimi-VL-A3B-Instruct) |
+| Architecture | Vision-Language MoE (64 experts) |
+| Tensors | 9,197 |
+| Source | ~31 GB (7 shards) |
+| GMAT | ~25 GB |
+
+See [example/kimi2/README.md](example/kimi2/README.md) for full details.
 
 ## License
 

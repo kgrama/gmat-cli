@@ -1,0 +1,36 @@
+{
+  "target_format": "gguf",
+  "quantization": {
+    "default_type": "q4_k_m",
+    "scale_optimization": "trellis",
+    "trellis_lambda": 0.3,
+    "per_tensor": {
+      "a1b2c3d4-5678-90ab-cdef-111111111111": "q6_k",
+      "f2ff6fc3-b374-4441-a6a1-21740012ad88": "q8_0",
+      "eac3a688-0b2f-4afb-8273-daa8f53e2180": "q8_0",
+      "e8358ac5-c004-4a30-acbf-3bb2f5efd809": "q8_0",
+      "10b5a078-d3ff-4bb7-98d4-2028a87963d8": "q8_0",
+      "fc1b54da-0e91-4500-8a1e-7ba3683275e5": "q8_0",
+      "603a2a10-4403-4882-bef6-c915436d0239": "q8_0",
+      "fd251f28-c40c-4b13-a3c7-ff6776a02dab": "q8_0",
+      "8f71d4c0-6cfe-45aa-ac22-cd13ad8200c6": "q8_0",
+      "95b70e4a-08c1-4447-9404-4c6b44b412c8": "q8_0",
+      "d27ab20a-8023-46b0-8260-2f4c29a494f0": "q8_0",
+      "9c8931e3-a095-4b54-8f3c-d6f721bb9858": "q6_k",
+      "19824ce0-3b8e-4dfc-b373-511c88dbad95": "q8_0",
+      "edaeed61-5016-4688-a2d7-7fe82eccd456": "q8_0",
+      "a16846cc-1ff9-4162-8580-2a2d8565b861": "q8_0",
+      "760d834f-0441-47bf-a89d-1d364ba694b5": "q8_0",
+      "5e45e282-c212-4b6e-82cd-960da096763b": "q8_0",
+      "6e881a42-a4f6-48e0-abb5-31be11669223": "q8_0"
+    }
+  },
+  "_comment": "Abbreviated export config. Full config contains per-tensor settings for all 9,197 tensors. Generate with: gmat export --model <path> --generate-config",
+  "_quantization_strategy": {
+    "default": "q4_k_m for bulk of parameters",
+    "embeddings": "q6_k for token embeddings and lm_head",
+    "layernorms": "q8_0 for all normalization layers (small, precision-critical)",
+    "biases": "q8_0 for all bias tensors",
+    "projector": "q8_0 for multi-modal projector layers"
+  }
+}

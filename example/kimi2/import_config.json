@@ -1,0 +1,102 @@
+{
+  "source_format": "safetensors",
+  "block_format": "B8x8",
+  "tensor_map": [
+    {
+      "source": "language_model.model.embed_tokens.weight",
+      "target": "a1b2c3d4-5678-90ab-cdef-111111111111",
+      "include": true
+    },
+    {
+      "source": "language_model.model.layers.0.input_layernorm.weight",
+      "target": "f2ff6fc3-b374-4441-a6a1-21740012ad88",
+      "include": true
+    },
+    {
+      "source": "language_model.model.layers.0.self_attn.q_proj.weight",
+      "target": "b1cd34c6-8472-4018-b754-621d8b29a06a",
+      "include": true
+    },
+    {
+      "source": "language_model.model.layers.0.mlp.experts.0.gate_proj.weight",
+      "target": "e89b4f69-faa1-43f9-a63a-709f6397f72f",
+      "include": true
+    },
+    {
+      "source": "language_model.model.layers.0.mlp.experts.0.up_proj.weight",
+      "target": "264385c7-b651-4564-aa5f-28dbab8dbeba",
+      "include": true
+    },
+    {
+      "source": "language_model.model.layers.0.mlp.experts.0.down_proj.weight",
+      "target": "97322f09-11a3-41f4-8b43-a99bc658ffc5",
+      "include": true
+    },
+    {
+      "source": "language_model.model.layers.0.mlp.shared_experts.gate_proj.weight",
+      "target": "e42de416-16d7-4ba0-bede-3d6670db1e02",
+      "include": true
+    },
+    {
+      "source": "vision_tower.patch_embed.proj.weight",
+      "target": "c6efc196-f53c-4e79-bf35-507f3f95e0ee",
+      "include": true
+    },
+    {
+      "source": "vision_tower.patch_embed.proj.bias",
+      "target": "603a2a10-4403-4882-bef6-c915436d0239",
+      "include": true
+    },
+    {
+      "source": "vision_tower.encoder.blocks.0.wqkv.weight",
+      "target": "55c553fb-770b-45a7-8d1d-6c7d69625468",
+      "include": true
+    },
+    {
+      "source": "vision_tower.encoder.blocks.0.mlp.fc0.weight",
+      "target": "8e377c2d-fa38-40ae-ad2f-01d4afb9b90c",
+      "include": true
+    },
+    {
+      "source": "vision_tower.encoder.final_layernorm.weight",
+      "target": "8f71d4c0-6cfe-45aa-ac22-cd13ad8200c6",
+      "include": true
+    },
+    {
+      "source": "vision_tower.encoder.final_layernorm.bias",
+      "target": "fd251f28-c40c-4b13-a3c7-ff6776a02dab",
+      "include": true
+    },
+    {
+      "source": "multi_modal_projector.pre_norm.weight",
+      "target": "8f71d4c0-6cfe-45aa-ac22-cd13ad8200c6",
+      "include": true
+    },
+    {
+      "source": "multi_modal_projector.linear_1.weight",
+      "target": "95b70e4a-08c1-4447-9404-4c6b44b412c8",
+      "include": true
+    },
+    {
+      "source": "multi_modal_projector.linear_1.bias",
+      "target": "95b70e4a-08c1-4447-9404-4c6b44b412c8",
+      "include": true
+    },
+    {
+      "source": "multi_modal_projector.linear_2.weight",
+      "target": "d27ab20a-8023-46b0-8260-2f4c29a494f0",
+      "include": true
+    },
+    {
+      "source": "multi_modal_projector.linear_2.bias",
+      "target": "d27ab20a-8023-46b0-8260-2f4c29a494f0",
+      "include": true
+    },
+    {
+      "source": "language_model.lm_head.weight",
+      "target": "9c8931e3-a095-4b54-8f3c-d6f721bb9858",
+      "include": true
+    }
+  ],
+  "_comment": "Abbreviated config showing key tensor patterns. Full config has 9,197 tensor mappings. Generate with: gmat import --model <path> --generate-config"
+}
