@@ -4,6 +4,7 @@
 
 mod shard;
 mod util;
+mod validate;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -143,6 +144,8 @@ use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
 use util::{
     ImportanceThresholds, num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name,
 };
+
+pub use validate::validate_gguf;
 
 /// Tensor analysis result for config generation.
 #[allow(dead_code)]

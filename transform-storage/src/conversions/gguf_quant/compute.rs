@@ -116,6 +116,7 @@ pub fn compute_q3k_mag(log2_mag: f32, log2_scale: f32) -> u8 {
 /// Finds nearest IQ4_NL quantization level using log2-domain thresholds.
 /// Delegates to iquant module's lookup function.
 #[inline(always)]
+#[allow(dead_code)]
 pub fn compute_iq4nl(log2_mag: f32, log2_scale: f32) -> u8 {
     super::iquant::find_nearest_iq4nl_log2(log2_mag, log2_scale)
 }
@@ -134,6 +135,7 @@ pub fn compute_iq4nl(log2_mag: f32, log2_scale: f32) -> u8 {
 /// # Returns
 /// Weighted absolute error between ideal and clamped quantized values.
 #[inline(always)]
+#[allow(dead_code)]
 pub fn compute_trellis_error(
     log2_mag: f32,
     log2_d: f32,

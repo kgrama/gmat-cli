@@ -133,6 +133,7 @@ fn compute_group_minmax(
 /// - g_idx: (in_features,) int32
 ///
 /// Note: GraphMatrix is (rows=out_features, cols=in_features).
+#[allow(clippy::too_many_arguments)]
 pub fn quantize_gptq(
     matrix: &GraphMatrix,
     dtype: QuantDType,

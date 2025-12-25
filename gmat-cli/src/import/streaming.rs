@@ -182,6 +182,7 @@ fn normalize_tensor_shape(shape: &[usize]) -> (usize, usize, usize) {
 }
 
 /// Send a single tensor plane to the processing channel.
+#[allow(clippy::too_many_arguments)]
 async fn send_tensor_plane(
     tx: &mpsc::Sender<ExtractedTensor>,
     state: &PipelineState,

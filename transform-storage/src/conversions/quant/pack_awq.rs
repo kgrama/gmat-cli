@@ -135,6 +135,7 @@ fn compute_group_scale(
 /// - qzeros: (in_features/group_size/8, out_features) int32
 ///
 /// Note: GraphMatrix is (rows=out_features, cols=in_features), so we transpose.
+#[allow(clippy::too_many_arguments)]
 pub fn quantize_awq(
     matrix: &GraphMatrix,
     dtype: QuantDType,

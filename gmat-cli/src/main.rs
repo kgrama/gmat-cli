@@ -59,6 +59,11 @@ enum Commands {
         #[arg(long)]
         generate_config: bool,
 
+        /// Validate the exported GGUF by loading it with llama.cpp.
+        /// Requires building with --features validate.
+        #[arg(long)]
+        validate: bool,
+
         /// High importance threshold for quant type selection (octave-shift ratio, 0-1).
         /// Tensors above this threshold get higher quality quantization.
         #[arg(long, default_value = "0.2")]
@@ -93,6 +98,7 @@ fn main() -> anyhow::Result<()> {
             output,
             shard_size,
             generate_config,
+            validate,
             importance_high,
             importance_medium,
         } => {
@@ -101,7 +107,12 @@ fn main() -> anyhow::Result<()> {
             } else {
                 // Convert MB to bytes if provided
                 let shard_bytes = shard_size.map(|mb| mb * 1_000_000);
-                export::run(&model, config.as_deref(), output.as_deref(), shard_bytes)?;
+                let output_file = output.as_deref().unwrap_or("model.gguf");
+                export::run(&model, config.as_deref(), Some(output_file), shard_bytes)?;
+
+                if validate {
+                    export::validate_gguf(output_file)?;
+                }
             }
         }
     }

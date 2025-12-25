@@ -22,6 +22,11 @@ build:
 release:
 	$(CARGO) build --manifest-path $(PROJECT_DIR)/Cargo.toml --release
 
+# Build with GGUF validation support (requires C++ toolchain + libclang)
+.PHONY: release-validate
+release-validate:
+	$(CARGO) build --manifest-path $(PROJECT_DIR)/Cargo.toml --release --features validate
+
 # Run the CLI (debug build)
 .PHONY: run
 run:
@@ -69,6 +74,12 @@ install: release
 	@mkdir -p $(INSTALL_DIR)
 	cp $(TARGET_DIR)/release/$(BINARY_NAME) $(INSTALL_DIR)/
 
+# Install with GGUF validation support
+.PHONY: install-validate
+install-validate: release-validate
+	@mkdir -p $(INSTALL_DIR)
+	cp $(TARGET_DIR)/release/$(BINARY_NAME) $(INSTALL_DIR)/
+
 # Uninstall the binary
 .PHONY: uninstall
 uninstall:
@@ -84,16 +95,18 @@ doc:
 help:
 	@echo "gmat-cli Makefile targets:"
 	@echo ""
-	@echo "  build     - Build debug binary (default)"
-	@echo "  release   - Build optimized release binary"
-	@echo "  run       - Run the CLI (use ARGS=\"...\" for arguments)"
+	@echo "  build            - Build debug binary (default)"
+	@echo "  release          - Build optimized release binary"
+	@echo "  release-validate - Build release with GGUF validation (needs C++ + libclang)"
+	@echo "  run              - Run the CLI (use ARGS=\"...\" for arguments)"
 	@echo "  test      - Run all tests"
 	@echo "  lint      - Run clippy lints"
 	@echo "  fmt       - Format code"
 	@echo "  fmt-check - Check code formatting"
-	@echo "  clean     - Remove build artifacts"
-	@echo "  install   - Install binary (use INSTALL_DIR=... to override)"
-	@echo "  uninstall - Remove installed binary"
+	@echo "  clean            - Remove build artifacts"
+	@echo "  install          - Install binary (use INSTALL_DIR=... to override)"
+	@echo "  install-validate - Install with GGUF validation support"
+	@echo "  uninstall        - Remove installed binary"
 	@echo "  check     - Check compilation without building"
 	@echo "  doc       - Build and open documentation"
 	@echo "  help      - Show this help message"

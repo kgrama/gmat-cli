@@ -48,8 +48,8 @@ fn trellis_single(log_offsets: &[f32], lambda: f32, num_states: usize) -> Vec<u8
     let mut cost = vec![vec![f32::INFINITY; num_states]; size];
     let mut parent = vec![vec![0u8; num_states]; size];
 
-    for s in 0..num_states {
-        cost[0][s] = compute_quant_error(log_offsets[0], s as u8, num_states);
+    for (s, cost_row) in cost[0].iter_mut().enumerate().take(num_states) {
+        *cost_row = compute_quant_error(log_offsets[0], s as u8, num_states);
     }
 
     for i in 1..size {
@@ -194,6 +194,7 @@ fn normalize_block(values: &[f32], scale: f32, num_states: usize) -> Vec<f32> {
 }
 
 /// Quantize to TrellisSingle format with single-view DP optimization
+#[allow(clippy::too_many_arguments)]
 pub fn quantize_trellis_single(
     matrix: &GraphMatrix,
     dtype: QuantDType,
@@ -273,6 +274,7 @@ pub fn quantize_trellis_single(
 }
 
 /// Quantize to TrellisDual format with dual-view joint optimization
+#[allow(clippy::too_many_arguments)]
 pub fn quantize_trellis_dual(
     matrix: &GraphMatrix,
     dtype: QuantDType,

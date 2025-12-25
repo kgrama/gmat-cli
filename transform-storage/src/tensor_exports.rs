@@ -133,8 +133,9 @@ impl GraphMatrix {
         });
 
         // Fill remaining row_ptr entries
-        for i in (current_row + 1)..=rows {
-            row_ptr[i] = log2_values.len();
+        let final_len = log2_values.len();
+        for ptr in row_ptr.iter_mut().take(rows + 1).skip(current_row + 1) {
+            *ptr = final_len;
         }
 
         crate::conversions::LogSparseCsrMatrix::new(

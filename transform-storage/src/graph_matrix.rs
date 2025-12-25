@@ -367,6 +367,7 @@ impl GraphMatrix {
     ///
     /// Transposes row_blocks into col_blocks by encoding columns directly
     /// without allocating a full matrix buffer. Enables efficient column iteration via col_iter().
+    #[allow(clippy::needless_range_loop)]
     pub fn build_col_index(&mut self) {
         let (rows, cols) = self.shape;
         if rows == 0 || cols == 0 {
