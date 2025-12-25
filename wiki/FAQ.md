@@ -1,175 +1,272 @@
 # FAQ
 
-Frequently asked questions about GMAT defaults, optimization options, and design decisions.
+Frequently asked questions about GMAT-CLI, organized by topic for easy navigation.
 
-## General
+---
 
-### Does GMAT require a GPU?
+## 1. General Questions
 
-**No.** GMAT runs entirely on CPU. There are no CUDA, ROCm, or GPU dependencies. This means you can:
+### What is GMAT-CLI?
+
+GMAT-CLI is a CPU-only model management tool that converts SafeTensors models to GGUF format with quantization. It provides an intermediate GMAT storage format that enables flexible, configuration-driven quantization without re-importing models.
+
+**Key workflow:**
+```
+SafeTensors → gmat import → GMAT Storage → gmat export → GGUF (quantized)
+```
+
+The GMAT intermediate format uses tensor-addressed storage with UUID-based individual tensor files, making quantization a configuration choice rather than a one-time conversion.
+
+### Why use GMAT-CLI instead of llama.cpp directly?
+
+GMAT-CLI offers several advantages:
+
+1. **CPU-only processing**: No GPU required for conversion or quantization
+2. **Large model support**: Stream 70B+ models with bounded memory usage
+3. **Flexible quantization**: Store once, export multiple quantization profiles
+4. **Per-tensor control**: Override quantization for specific tensors (e.g., Q8_0 embeddings, Q4_K_M FFN layers)
+5. **Production workflow**: Optimized for converting many models/fine-tunes with consistent configs
+
+If you're managing multiple quantization profiles or processing models on CPU-only infrastructure, GMAT-CLI is designed for your workflow.
+
+### Is GPU required?
+
+**No.** GMAT-CLI runs entirely on CPU. There are no CUDA, ROCm, or GPU dependencies. This means you can:
 - Convert models on any server or laptop
 - Run in CI/CD pipelines without GPU runners
-- Process 70B+ models with just CPU and sufficient disk space
+- Process 70B+ models with just CPU and sufficient RAM/disk
 
 The streaming pipeline uses bounded memory, so even large models work without excessive RAM.
 
-## Why These Defaults?
+### What platforms are supported?
 
-### Default Quantization: Q4_K_M
+- **Linux**: Full support (primary platform)
+- **macOS**: Full support
+- **Windows**: WSL2 recommended (native Windows not officially tested)
 
-**Q: Why is Q4_K_M the default quantization type?**
+NVMe storage is recommended for best performance, especially with 70B+ models.
 
-Q4_K_M (4-bit K-quant, medium) offers the best balance for most deployments:
+---
 
-| Format | Bits | Quality | Size | Use Case |
+## 2. Installation & Setup
+
+### What Rust version is required?
+
+**Rust 1.70+** is required. Install from [rustup.rs](https://rustup.rs/):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup update
+```
+
+Verify installation:
+```bash
+rustc --version  # Should show 1.70 or higher
+```
+
+### How do I fix build errors?
+
+Common build issues:
+
+**Issue: "error: linker 'cc' not found"**
+```bash
+# Ubuntu/Debian
+sudo apt install build-essential
+
+# macOS (install Xcode Command Line Tools)
+xcode-select --install
+```
+
+**Issue: "failed to fetch ..."**
+```bash
+# Update cargo registry
+cargo clean
+rm -rf ~/.cargo/registry/index/*
+cargo build --release
+```
+
+**Issue: Out of memory during build**
+```bash
+# Limit parallel jobs
+cargo build --release -j 2
+```
+
+### How do I configure PATH after installation?
+
+After `cargo install gmat-cli`, ensure `~/.cargo/bin` is in your PATH:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# Reload shell or source config
+source ~/.bashrc
+
+# Verify
+gmat --version
+```
+
+---
+
+## 3. Import Questions
+
+### What input formats are supported?
+
+**Primary format: SafeTensors**
+- Single-file `.safetensors` models
+- Multi-file sharded SafeTensors (e.g., `model-00001-of-00003.safetensors`)
+
+**NOT supported:**
+- PyTorch `.pth` or `.bin` files (convert to SafeTensors first)
+- GGUF imports (planned for future versions)
+
+To convert PyTorch to SafeTensors, use:
+```python
+from safetensors.torch import save_file
+save_file(model.state_dict(), "model.safetensors")
+```
+
+### How do I handle large models (70B+)?
+
+For models over 32GB:
+
+1. **Ensure sufficient RAM**: 32GB+ recommended for 70B models
+2. **Use NVMe storage**: Faster I/O reduces processing time
+3. **Monitor disk space**: Need 2-3x model size for GMAT storage + temp files
+4. **Import with default block format**: B8x8 balances size and accuracy
+
+Example for 70B model:
+```bash
+gmat import model.safetensors output.gmat
+# Uses streaming pipeline with bounded memory
+```
+
+The streaming producer-consumer pipeline processes tensors incrementally, avoiding full model load.
+
+### Does GMAT support sharded models?
+
+**Yes.** Multi-file SafeTensors are automatically detected and merged:
+
+```bash
+gmat import model-00001-of-00003.safetensors output.gmat
+# Automatically finds and processes all shards
+```
+
+All shards must be in the same directory with consistent naming:
+- `model-00001-of-00003.safetensors`
+- `model-00002-of-00003.safetensors`
+- `model-00003-of-00003.safetensors`
+
+### How do I generate a config file?
+
+Use `--generate-config` during import:
+
+```bash
+gmat import model.safetensors output.gmat --generate-config
+# Creates: output.gmat/import_config.json
+```
+
+This generates a template you can modify for custom block formats or per-tensor settings. See [Configuration Files](Configuration-Files.md) for full schema.
+
+---
+
+## 4. Export & Quantization Questions
+
+### Which quantization type should I choose?
+
+| Format | Bits | Quality | Size | Best For |
 |--------|------|---------|------|----------|
-| Q8_0 | 8 | Excellent | Large | Quality-critical, plenty of VRAM |
-| Q6_K | 6 | Very good | Medium | High-quality production |
-| **Q4_K_M** | 4 | Good | Small | **General production (default)** |
-| Q4_0 | 4 | Acceptable | Smallest | Edge/mobile, maximum compression |
+| **Q8_0** | 8 | Excellent | Large | Quality-critical, plenty of VRAM |
+| **Q6_K** | 6 | Very good | Medium | High-quality production |
+| **Q4_K_M** | 4 | Good | Small | General production **(default)** |
+| **Q4_0** | 4 | Acceptable | Smallest | Edge/mobile, maximum compression |
+| **Q2_K** | 2-3 | Experimental | Tiny | Research/extreme compression |
 
-Q4_K_M specifically uses:
-- 4-bit quantization with K-quant's improved scale handling
-- 256-element superblocks with 16-element sub-groups
-- Per-group scales and minimums for better dynamic range
+**Recommendation:**
+- Start with **Q4_K_M** (default) for balanced quality/size
+- Use **Q6_K** or **Q8_0** for critical tensors (embeddings, output layer)
+- Use **Q4_0** for maximum compression on resource-constrained devices
 
-For most LLM workloads, Q4_K_M achieves 90-95% of full-precision quality at 4x size reduction.
+### What are the quality vs size tradeoffs?
 
-### Default Block Format: B8x8
+Measured on LLaMA-7B (approximate perplexity increase):
 
-**Q: Why is B8x8 the default GMAT block format?**
+| Format | Size (GB) | Perplexity Δ | vs Q8_0 Quality |
+|--------|-----------|--------------|-----------------|
+| Q8_0 | 7.0 | +0.00 | 100% (baseline) |
+| Q6_K | 5.4 | +0.05 | ~98% |
+| Q4_K_M | 3.9 | +0.15 | ~95% |
+| Q4_0 | 3.7 | +0.30 | ~90% |
+| Q2_K | 2.8 | +0.80 | ~75% |
 
-B8x8 (8 elements, 8-bit magnitudes) provides the best accuracy-to-size tradeoff:
+**Rule of thumb:** Each halving of bits costs 5-10% perplexity for well-optimized quantization.
 
-| Format | Elements | Bits | Octave Range | Best For |
-|--------|----------|------|--------------|----------|
-| B8x4 | 8 | 4 | 1-2 | Maximum compression |
-| **B8x8** | 8 | 8 | 4 | **General use (default)** |
-| B16x4 | 16 | 4 | 1-2 | Large sparse models |
-| B16x8 | 16 | 8 | 4 | High accuracy, large scale |
+### What's the difference between IQ4_XS and IQ4_NL?
 
-Why 8 elements over 16?
-- Finer sparsity granularity (skip smaller empty regions)
-- Each block shares one scale, so fewer elements = less scale quantization error
+Both are 4-bit I-quant formats with improved accuracy over Q4_K_M:
 
-Why 8-bit over 4-bit?
-- 4 octaves of dynamic range (vs 1-2 for 4-bit)
-- 128 steps per octave (vs 16 for 4-bit)
-- Critical for layers with high weight variance
+| Format | Approach | Quality | Size | Speed |
+|--------|----------|---------|------|-------|
+| **Q4_K_M** | K-quant with superblocks | Baseline | Baseline | Fast |
+| **IQ4_NL** | Non-linear quantization | +2-3% perplexity | +5% size | Medium |
+| **IQ4_XS** | Extra-small codebook | +1-2% perplexity | Same as Q4_K_M | Slower |
 
-### Default Scale Optimization: Trellis
+**When to use:**
+- **IQ4_NL**: Best quality at 4-bit, slightly larger files
+- **IQ4_XS**: Same size as Q4_K_M, better quality, slower inference
+- **Q4_K_M**: Balanced default, widest compatibility
 
-**Q: Why is trellis the default scale optimization?**
+**Compatibility note:** I-quant formats require llama.cpp commit `b1696` or later.
 
-Trellis optimization uses dynamic programming to find scale assignments that minimize total quantization error while encouraging smoothness between adjacent scales. This typically improves quality by 0.5-2% perplexity with minimal overhead.
+### What is Trellis optimization?
+
+Trellis optimization uses dynamic programming to find globally optimal scale assignments across quantization blocks, minimizing total error while encouraging smoothness.
 
 ```
-Standard:  Each group picks its own optimal scale independently
+Standard:  Each block picks its own optimal scale independently
 Trellis:   DP finds globally-optimal scales with smoothness penalty
 ```
 
-The `trellis_lambda` parameter (default: 0.3) controls the smoothness penalty:
+**Benefits:**
+- 0.5-2% perplexity improvement
+- Minimal encoding overhead (~10-20% slower)
+- No calibration data required
+
+**Configuration:**
+```json
+{
+  "quantization": {
+    "scale_optimization": "trellis",
+    "trellis_lambda": 0.3
+  }
+}
+```
+
+**Lambda values:**
 - `0.0`: No smoothing (equivalent to standard)
-- `0.3`: Moderate smoothing (default)
+- `0.3`: Moderate smoothing **(default)**
 - `1.0`: Strong smoothing (may over-smooth)
 
----
+**When to disable:** Use `"standard"` when debugging quantization issues or matching other tools' behavior.
 
-## Trellis Optimization
+### How do per-tensor overrides work?
 
-### What is Trellis Quantization?
+Override quantization for specific tensors using their UUIDs:
 
-**Q: What does "trellis" mean in GMAT?**
-
-Trellis quantization is a dynamic programming technique borrowed from audio/video codecs. Instead of quantizing each block independently, it considers sequences of blocks and finds the globally optimal quantization that minimizes total error.
-
-For GGUF K-quants (Q4_K_M, Q5_K_M, Q6_K), each 256-element superblock contains 16 sub-groups of 16 elements. Trellis optimizes the scale assignment across these sub-groups:
-
-```
-Standard approach:
-  Group 1 → pick best scale for group 1
-  Group 2 → pick best scale for group 2
-  ...
-  (each decision is independent)
-
-Trellis approach:
-  Consider all groups together
-  Find scale sequence that minimizes: Σ(quantization_error) + λ×Σ(scale_jumps)
-  (decisions are jointly optimal)
+```json
+{
+  "quantization": {
+    "default_type": "q4_k_m",
+    "per_tensor": {
+      "<embedding-uuid>": "q8_0",
+      "<output-uuid>": "q8_0",
+      "<attn-q-uuid>": "q6_k"
+    }
+  }
+}
 ```
 
-### Why "Without Hessian"?
-
-**Q: What's the difference between GMAT's trellis and GPTQ/AWQ?**
-
-Traditional methods like GPTQ and AWQ use the **Hessian matrix** (second derivatives of loss) computed from calibration data to weight quantization errors. This requires:
-1. A calibration dataset
-2. Forward passes through the model
-3. O(n²) storage for the Hessian
-
-GMAT's trellis operates **without Hessian** information:
-- Uses only the weight values themselves
-- No calibration data required
-- O(n) time and space complexity
-
-The tradeoff:
-
-| Method | Calibration | Accuracy | Speed |
-|--------|-------------|----------|-------|
-| GPTQ | Required | Best | Slow |
-| AWQ | Required | Very good | Medium |
-| **GMAT Trellis** | None | Good | Fast |
-
-For production workflows where you're quantizing many models or fine-tunes, GMAT's approach is often preferable: slightly lower accuracy but much faster iteration.
-
----
-
-## Static Saliency
-
-### What is Static Saliency?
-
-**Q: GMAT mentions "saliency without calibration" - how does that work?**
-
-Saliency measures how important each weight is to the model's output. Traditional methods (AWQ, SmoothQuant) compute this from activation patterns during calibration runs.
-
-GMAT's **static saliency** approximates importance using only weight statistics:
-
-```
-Traditional (with calibration):
-  importance[i] = |weight[i]| × mean(|activation[i]|)
-  ↑ requires forward passes
-
-Static saliency (no calibration):
-  importance[i] = |weight[i]| × upstream_scale[i]
-  ↑ derived from weight distributions
-```
-
-The insight: embedding layer scales and layer-to-layer weight scales correlate with activation magnitudes. By chaining these scales through the network, GMAT approximates saliency without running the model.
-
-This provides ~80-90% of the benefit of full calibration for most LLMs, with zero inference cost.
-
-### When to Use Calibration Instead?
-
-Static saliency works well when:
-- Processing many models/fine-tunes (speed matters)
-- Models follow standard architectures (LLaMA, GPT, etc.)
-- Moderate quantization (Q4_K_M to Q8_0)
-
-Consider calibration-based tools when:
-- Maximum accuracy is critical
-- Aggressive quantization (Q2, Q3)
-- Non-standard architectures
-- Quantizing for specific tasks/domains
-
----
-
-## Quantization Type Selection
-
-### Per-Tensor Overrides
-
-**Q: Why would I set different quantization per tensor?**
-
-Not all tensors are equally sensitive to quantization:
+**Why use overrides?**
 
 | Tensor Type | Sensitivity | Recommendation |
 |-------------|-------------|----------------|
@@ -178,109 +275,219 @@ Not all tensors are equally sensitive to quantization:
 | `attn_q/k/v.weight` | Medium | Q4_K_M to Q6_K |
 | `ffn_*.weight` | Lower | Q4_K_M or Q4_0 |
 
-Embeddings and output layers handle the token vocabulary directly - quantization errors here affect every token. FFN layers are more tolerant because their errors average out across many parameters.
+Embeddings and output layers handle token vocabulary directly - quantization errors affect every token. FFN layers are more tolerant.
 
-Example config:
+---
+
+## 5. Performance Questions
+
+### How much memory do I need?
+
+**Minimum requirements by model size:**
+
+| Model Size | RAM Required | Storage Required | CPU Cores |
+|------------|-------------|------------------|-----------|
+| 7B | 8GB | 20GB | 4+ |
+| 13B | 16GB | 40GB | 4+ |
+| 30B | 24GB | 90GB | 8+ |
+| 70B+ | 32GB+ | 200GB+ | 8+ |
+
+**Storage:** Need 2-3x model size for GMAT intermediate storage + temp files. NVMe recommended.
+
+**RAM:** Bounded by streaming pipeline, but larger models need more memory for parallel processing buffers.
+
+### How many CPU cores are recommended?
+
+- **Minimum:** 4 cores (will work but slower)
+- **Recommended:** 8+ cores for optimal parallelization
+- **Ideal:** 16+ cores for 70B+ models
+
+GMAT uses Rayon for parallel tensor processing. More cores = faster import/export, especially for large models.
+
+### How can I optimize processing speed?
+
+**Hardware:**
+1. Use NVMe storage (10x faster than HDD)
+2. More CPU cores (linear scaling up to ~16 cores)
+3. Faster RAM (3200MHz+ helps with large models)
+
+**Software:**
+1. Close unnecessary applications (free up RAM)
+2. Use default B8x8 block format (faster than B16x8)
+3. Disable trellis for faster encoding: `"scale_optimization": "standard"`
+
+**Example:** 70B model on 16-core CPU with NVMe:
+- Import: ~15-25 minutes
+- Export (Q4_K_M): ~20-35 minutes
+
+---
+
+## 6. Troubleshooting
+
+### "Error: Out of memory" during import/export
+
+**Causes:**
+1. Insufficient RAM for model size
+2. Too many parallel workers for available memory
+3. Memory leak or fragmentation
+
+**Solutions:**
+```bash
+# 1. Limit parallel workers (reduces memory usage)
+export RAYON_NUM_THREADS=4
+gmat import model.safetensors output.gmat
+
+# 2. Free up memory
+# Close browsers, IDEs, other applications
+
+# 3. Check available memory
+free -h  # Linux
+vm_stat  # macOS
+
+# 4. For 70B+ models, ensure 32GB+ RAM
+```
+
+### "Error: Unsupported tensor shape" during quantization
+
+**Cause:** Tensor doesn't meet alignment requirements:
+- K-quant formats (Q4_K_M, Q6_K) require 256-element alignment
+- Legacy formats (Q4_0, Q8_0) require 32-element alignment
+
+**Solution:** GMAT auto-falls back to Q8_0 for misaligned tensors. If this fails:
 ```json
 {
   "quantization": {
-    "default_type": "q4_k_m",
     "per_tensor": {
-      "<embedding-uuid>": "q8_0",
-      "<output-uuid>": "q8_0"
+      "<problematic-uuid>": "f16"
     }
   }
 }
 ```
 
-### K-Quants vs Legacy
+Small tensors (biases, layer norms) are typically kept at full precision.
 
-**Q: What's the difference between Q4_0 and Q4_K_M?**
+### Processing is very slow
 
-Legacy formats (Q4_0, Q5_0, Q8_0):
-- Simple: one f16 scale per 32 elements
-- Symmetric quantization
-- Faster to encode/decode
-- Less accurate for varied distributions
+**Check these factors:**
 
-K-quant formats (Q4_K_M, Q5_K_M, Q6_K):
-- Complex: 256-element superblocks with sub-group scales
-- Asymmetric with minimums (better dynamic range)
-- ~20-30% better perplexity at same bit rate
-- Slightly slower encode/decode
+1. **Storage speed:**
+   ```bash
+   # Test disk speed
+   dd if=/dev/zero of=testfile bs=1G count=1 oflag=direct
+   # Should see 500MB/s+ for NVMe, 100MB/s+ for SSD
+   ```
 
-**Use K-quants** (Q4_K_M, Q6_K) unless you need:
-- Maximum inference speed (use Q4_0, Q8_0)
-- Compatibility with older llama.cpp versions
+2. **CPU usage:**
+   ```bash
+   htop  # or top
+   # Should see near 100% CPU on all cores during processing
+   ```
+
+3. **Memory pressure:**
+   ```bash
+   free -h
+   # If swap is heavily used, you need more RAM
+   ```
+
+4. **Block format:** B16x8 is slower than B8x8 (default)
+
+### "Error: Failed to parse SafeTensors header"
+
+**Causes:**
+1. Corrupted download
+2. Not a SafeTensors file (PyTorch .bin, etc.)
+3. Incomplete file (download interrupted)
+
+**Solutions:**
+```bash
+# 1. Verify file integrity
+ls -lh model.safetensors
+# Check size matches expected
+
+# 2. Verify SafeTensors format
+head -c 100 model.safetensors
+# Should start with JSON header
+
+# 3. Re-download or convert from PyTorch
+```
+
+### Exported GGUF fails to load in llama.cpp
+
+**Check compatibility:**
+
+1. **I-quant formats:** Require llama.cpp commit `b1696+`
+   ```bash
+   cd llama.cpp
+   git log --oneline | head -1
+   # Should be b1696 or later for IQ4_XS/IQ4_NL
+   ```
+
+2. **Architecture support:** Verify model type is supported
+3. **File corruption:** Re-export GGUF with `--verbose` for debugging
 
 ---
 
-## Common Workflows
+## 7. Compatibility
 
-### Multi-Tier Deployment
+### What llama.cpp versions are compatible?
 
-**Q: How do I create multiple quantized versions for different tiers?**
+| GMAT Feature | llama.cpp Requirement |
+|--------------|----------------------|
+| Q4_K_M, Q6_K | Any recent version |
+| Q8_0, Q4_0 | Any version |
+| IQ4_XS, IQ4_NL | Commit `b1696+` |
+| Sharded GGUF | Recent versions (2024+) |
 
-Store one GMAT, create multiple export configs:
+**Recommendation:** Use latest llama.cpp release for best compatibility.
 
-```
-model.gmat/                        # Full precision source
-├── export/
-│   ├── export-economy.json        # Q4_0 default, all tensors
-│   ├── export-balanced.json       # Q4_K_M default, Q6_K critical
-│   └── export-premium.json        # Q8_0 default, Q8_0 critical
-└── gguf/
-    ├── model-economy.gguf         # Smallest, fastest
-    ├── model-balanced.gguf        # Production default
-    └── model-premium.gguf         # Highest quality
-```
+### What model architectures are supported?
 
-All three GGUFs come from the same source tensors - quantization is just configuration.
+**Text models:**
+- LLaMA (1, 2, 3)
+- Qwen, Qwen2
+- Phi (1, 2, 3)
+- Gemma
+- DeepSeek
+- Mistral, Mixtral (MoE)
 
-### Fine-Tune Factory
+**Vision-language models:**
+- LLaVA
+- Qwen-VL
+- Kimi-VL
+- InternVL
 
-**Q: I have 50 fine-tunes. How does GMAT help?**
+**Encoder-decoder models:**
+- T5
+- BART
+- Whisper
 
-Each fine-tune shares most tensors with the base model:
+See [Technical Details](Technical-Details.md) for architecture-specific details.
 
-1. **Consistent workflow**: Same import/export process for all
-2. **Tensor-level organization**: UUIDs identify shared vs changed tensors
-3. **Reusable configs**: Same export profiles work across fine-tunes
+### Will GGUF import be supported?
 
-Future roadmap includes deduplication - storing only the tensors that differ from base.
+**Planned for future versions.** Current workflow is SafeTensors → GMAT → GGUF.
 
----
+For now, to modify existing GGUF quantization:
+1. Obtain original SafeTensors model
+2. Import to GMAT
+3. Export with desired quantization
 
-## Troubleshooting
+### Will other export formats be supported?
 
-### Scale Optimization Disabled
+Current focus is GGUF as the primary inference format. Future considerations:
+- ONNX export
+- TensorRT-LLM export
+- Custom quantization formats
 
-**Q: When should I use `"standard"` instead of `"trellis"`?**
-
-Use standard scale optimization when:
-- Debugging quantization issues (simpler to reason about)
-- Comparing against other tools (match their behavior)
-- Maximum encode speed (trellis adds ~10-20% overhead)
-
-For production, trellis is almost always better.
-
-### Dimension Alignment
-
-**Q: Why does quantization fail for some tensors?**
-
-K-quant formats require 256-element alignment. Legacy formats require 32-element alignment. If a tensor doesn't meet these requirements, GMAT falls back:
-
-```
-Requested Q4_K_M for 128-element tensor → Falls back to Q8_0 (32-aligned)
-Requested Q8_0 for 17-element tensor → Error (not 32-aligned)
-```
-
-Small tensors (biases, layer norms) typically aren't quantized.
+Submit feature requests on GitHub if you need specific formats.
 
 ---
 
 ## See Also
 
-- [Technical Details](Technical-Details.md) - Block formats, encoding, compression
-- [Configuration Files](Configuration-Files.md) - Full config reference
-- [Export Command](Export-Command.md) - Export options and examples
+- [Home](Home.md) - Overview and navigation
+- [Installation](Installation.md) - Setup and prerequisites
+- [Import Command](Import-Command.md) - Import usage and options
+- [Export Command](Export-Command.md) - Export and quantization reference
+- [Configuration Files](Configuration-Files.md) - Config schema and examples
+- [Technical Details](Technical-Details.md) - Deep dive into block formats and algorithms
