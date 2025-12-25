@@ -2,7 +2,7 @@
 
 use crate::blocks::BlockFormat;
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{Device, Tensor, Result};
+use candle_core::{Device, Result, Tensor};
 
 /// Type-erased wrapper for GraphMatrix that can hold any block format.
 #[derive(Debug, Clone)]
@@ -17,11 +17,22 @@ impl AnyGraphMatrix {
     /// Create AnyGraphMatrix from dense f32 data with configuration.
     pub fn from_dense(data: &[f32], shape: (usize, usize), config: &super::StorageConfig) -> Self {
         match config.get_format() {
-            BlockFormat::B16x8 => Self::B16x8(GraphMatrix::from_dense(data, shape, BlockFormat::B16x8)),
-            BlockFormat::B16x4 => Self::B16x4(GraphMatrix::from_dense(data, shape, BlockFormat::B16x4)),
-            BlockFormat::B8x8 => Self::B8x8(GraphMatrix::from_dense(data, shape, BlockFormat::B8x8)),
-            BlockFormat::B8x4 => Self::B8x4(GraphMatrix::from_dense(data, shape, BlockFormat::B8x4)),
-            BlockFormat::DualRow8x4 | BlockFormat::DualRow8x8 | BlockFormat::DualRow16x4 | BlockFormat::DualRow16x8 => {
+            BlockFormat::B16x8 => {
+                Self::B16x8(GraphMatrix::from_dense(data, shape, BlockFormat::B16x8))
+            }
+            BlockFormat::B16x4 => {
+                Self::B16x4(GraphMatrix::from_dense(data, shape, BlockFormat::B16x4))
+            }
+            BlockFormat::B8x8 => {
+                Self::B8x8(GraphMatrix::from_dense(data, shape, BlockFormat::B8x8))
+            }
+            BlockFormat::B8x4 => {
+                Self::B8x4(GraphMatrix::from_dense(data, shape, BlockFormat::B8x4))
+            }
+            BlockFormat::DualRow8x4
+            | BlockFormat::DualRow8x8
+            | BlockFormat::DualRow16x4
+            | BlockFormat::DualRow16x8 => {
                 panic!("AnyGraphMatrix does not support DualRow formats")
             }
         }
@@ -117,19 +128,31 @@ impl AnyGraphMatrix {
     // Type accessors - Option versions
 
     pub fn try_as_block16x8(&self) -> Option<&GraphMatrix> {
-        match self { Self::B16x8(m) => Some(m), _ => None }
+        match self {
+            Self::B16x8(m) => Some(m),
+            _ => None,
+        }
     }
 
     pub fn try_as_block16x4(&self) -> Option<&GraphMatrix> {
-        match self { Self::B16x4(m) => Some(m), _ => None }
+        match self {
+            Self::B16x4(m) => Some(m),
+            _ => None,
+        }
     }
 
     pub fn try_as_block8x8(&self) -> Option<&GraphMatrix> {
-        match self { Self::B8x8(m) => Some(m), _ => None }
+        match self {
+            Self::B8x8(m) => Some(m),
+            _ => None,
+        }
     }
 
     pub fn try_as_block8x4(&self) -> Option<&GraphMatrix> {
-        match self { Self::B8x4(m) => Some(m), _ => None }
+        match self {
+            Self::B8x4(m) => Some(m),
+            _ => None,
+        }
     }
 
     /// Create AnyGraphMatrix from a candle Tensor with configuration.
@@ -144,11 +167,18 @@ impl AnyGraphMatrix {
     /// Returns error if tensor extraction fails or tensor is not 2D
     pub fn from_tensor(tensor: &Tensor, config: &super::StorageConfig) -> Result<Self> {
         Ok(match config.get_format() {
-            BlockFormat::B16x8 => Self::B16x8(GraphMatrix::from_tensor(tensor, BlockFormat::B16x8)?),
-            BlockFormat::B16x4 => Self::B16x4(GraphMatrix::from_tensor(tensor, BlockFormat::B16x4)?),
+            BlockFormat::B16x8 => {
+                Self::B16x8(GraphMatrix::from_tensor(tensor, BlockFormat::B16x8)?)
+            }
+            BlockFormat::B16x4 => {
+                Self::B16x4(GraphMatrix::from_tensor(tensor, BlockFormat::B16x4)?)
+            }
             BlockFormat::B8x8 => Self::B8x8(GraphMatrix::from_tensor(tensor, BlockFormat::B8x8)?),
             BlockFormat::B8x4 => Self::B8x4(GraphMatrix::from_tensor(tensor, BlockFormat::B8x4)?),
-            BlockFormat::DualRow8x4 | BlockFormat::DualRow8x8 | BlockFormat::DualRow16x4 | BlockFormat::DualRow16x8 => {
+            BlockFormat::DualRow8x4
+            | BlockFormat::DualRow8x8
+            | BlockFormat::DualRow16x4
+            | BlockFormat::DualRow16x8 => {
                 panic!("AnyGraphMatrix does not support DualRow formats")
             }
         })
@@ -236,12 +266,13 @@ impl AnyGraphMatrix {
             BlockFormat::B16x4 => Ok(Self::B16x4(GraphMatrix::load_from_reader(&mut file)?)),
             BlockFormat::B8x8 => Ok(Self::B8x8(GraphMatrix::load_from_reader(&mut file)?)),
             BlockFormat::B8x4 => Ok(Self::B8x4(GraphMatrix::load_from_reader(&mut file)?)),
-            BlockFormat::DualRow8x4 | BlockFormat::DualRow8x8 | BlockFormat::DualRow16x4 | BlockFormat::DualRow16x8 => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "AnyGraphMatrix does not support DualRow formats",
-                ))
-            }
+            BlockFormat::DualRow8x4
+            | BlockFormat::DualRow8x8
+            | BlockFormat::DualRow16x4
+            | BlockFormat::DualRow16x8 => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "AnyGraphMatrix does not support DualRow formats",
+            )),
         }
     }
 }
@@ -528,7 +559,11 @@ mod tests {
             matrix.save(temp_file.path()).unwrap();
 
             let loaded = AnyGraphMatrix::load(temp_file.path()).unwrap();
-            assert_eq!(loaded.format(), format, "Format should be preserved after save/load");
+            assert_eq!(
+                loaded.format(),
+                format,
+                "Format should be preserved after save/load"
+            );
         }
     }
 

@@ -1,7 +1,7 @@
 //! Simple packed quantization (2×i4 → u8, i8 → u8).
 
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{Device, Tensor, Result};
+use candle_core::{Device, Result, Tensor};
 
 use super::pack_none::quantize_unpacked;
 use super::types::{PackFormat, QuantDType, QuantParams, QuantizedTensors};
@@ -64,7 +64,15 @@ pub fn quantize_simple_packed(
         }
         _ => {
             // Fall back to unpacked for other types
-            return quantize_unpacked(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device);
+            return quantize_unpacked(
+                matrix,
+                dtype,
+                clip_percentile,
+                log2_center,
+                log2_range,
+                nnz,
+                device,
+            );
         }
     };
 

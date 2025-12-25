@@ -16,7 +16,7 @@ use transform_storage::{BlockFormat, GmatMetadata, GraphMatrix};
 
 use crate::common::bytes_to_f32;
 use crate::config::import_config::ImportConfig;
-use crate::workqueue::{run_pipeline, PipelineState};
+use crate::workqueue::{PipelineState, run_pipeline};
 
 /// Tensor data extracted from safetensor, ready for conversion.
 pub struct ExtractedTensor {
@@ -153,7 +153,8 @@ async fn run_streaming_import_async(
         },
         // Writer: collect results and print progress
         move |rx, state| collect_results_task(rx, state, results_for_writer, total),
-    ).await?;
+    )
+    .await?;
 
     let saved = Arc::try_unwrap(results)
         .map_err(|_| anyhow::anyhow!("Failed to unwrap results"))?
@@ -167,8 +168,8 @@ async fn run_streaming_import_async(
 /// Returns (num_planes, rows, cols) where planes represent leading dimensions.
 fn normalize_tensor_shape(shape: &[usize]) -> (usize, usize, usize) {
     match shape.len() {
-        0 => (1, 1, 1), // scalar
-        1 => (1, 1, shape[0]), // 1D -> 1xN
+        0 => (1, 1, 1),               // scalar
+        1 => (1, 1, shape[0]),        // 1D -> 1xN
         2 => (1, shape[0], shape[1]), // 2D -> 1 plane
         _ => {
             // N-D: leading dims are planes, last 2 dims are matrix
@@ -213,16 +214,23 @@ async fn send_tensor_plane(
     let plane_data = f32_data[start..end].to_vec();
 
     state.inc_produced();
-    Ok(tx.send(ExtractedTensor {
-        name: plane_name,
-        target_uuid: plane_uuid,
-        shape: (rows, cols),
-        dtype_str,
-        f32_data: plane_data,
-        original_shape,
-        plane_index: if num_planes > 1 { Some(plane_idx) } else { None },
-        num_planes,
-    }).await.is_ok())
+    Ok(tx
+        .send(ExtractedTensor {
+            name: plane_name,
+            target_uuid: plane_uuid,
+            shape: (rows, cols),
+            dtype_str,
+            f32_data: plane_data,
+            original_shape,
+            plane_index: if num_planes > 1 {
+                Some(plane_idx)
+            } else {
+                None
+            },
+            num_planes,
+        })
+        .await
+        .is_ok())
 }
 
 /// Extract tensors from a safetensor file and send to channel.
@@ -270,7 +278,8 @@ async fn extract_and_send_tensors(
                 &f32_data,
                 shape.to_vec(),
                 dtype_str.clone(),
-            ).await?;
+            )
+            .await?;
 
             if !send_ok {
                 return Ok(());

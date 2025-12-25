@@ -3,8 +3,8 @@
 //! Provides utilities to prepare metadata for export, updating format-specific
 //! fields while preserving original model configuration.
 
-use crate::formats::{GmatMetadata, metadata_keys};
 use crate::blocks::BlockFormat;
+use crate::formats::{metadata_keys, GmatMetadata};
 
 /// Convert BlockFormat enum to string representation
 fn block_format_to_string(format: BlockFormat) -> &'static str {
@@ -110,10 +110,10 @@ pub fn prepare_export_metadata_with_dtype(
     conversion_notes: Option<&str>,
 ) -> GmatMetadata {
     let mut metadata = prepare_export_metadata(original, current_format, conversion_notes);
-    
+
     // Update original dtype to reflect conversion
     metadata.set_str(metadata_keys::ORIGINAL_DTYPE, new_dtype);
-    
+
     metadata
 }
 
@@ -128,11 +128,7 @@ mod tests {
         original.set_i64("vocab_size", 50257);
         original.set_i64("hidden_size", 768);
 
-        let adapted = prepare_export_metadata(
-            Some(&original),
-            BlockFormat::B16x8,
-            None,
-        );
+        let adapted = prepare_export_metadata(Some(&original), BlockFormat::B16x8, None);
 
         assert_eq!(adapted.get_str("architecture"), Some("gpt2"));
         assert_eq!(adapted.get_i64("vocab_size"), Some(50257));
@@ -144,26 +140,25 @@ mod tests {
         let mut original = GmatMetadata::new();
         original.set_str(metadata_keys::BLOCK_FORMAT, "B8x4");
 
-        let adapted = prepare_export_metadata(
-            Some(&original),
-            BlockFormat::DualRow16x8,
-            None,
-        );
+        let adapted = prepare_export_metadata(Some(&original), BlockFormat::DualRow16x8, None);
 
-        assert_eq!(adapted.get_str(metadata_keys::BLOCK_FORMAT), Some("DualRow16x8"));
+        assert_eq!(
+            adapted.get_str(metadata_keys::BLOCK_FORMAT),
+            Some("DualRow16x8")
+        );
     }
 
     #[test]
     fn test_prepare_export_metadata_adds_conversion_info() {
         let original = GmatMetadata::new();
 
-        let adapted = prepare_export_metadata(
-            Some(&original),
-            BlockFormat::B16x8,
-            Some("quantized to i8"),
-        );
+        let adapted =
+            prepare_export_metadata(Some(&original), BlockFormat::B16x8, Some("quantized to i8"));
 
-        assert_eq!(adapted.get_str(metadata_keys::CONVERSION_INFO), Some("quantized to i8"));
+        assert_eq!(
+            adapted.get_str(metadata_keys::CONVERSION_INFO),
+            Some("quantized to i8")
+        );
     }
 
     #[test]
@@ -196,19 +191,22 @@ mod tests {
         );
 
         assert_eq!(adapted.get_str(metadata_keys::ORIGINAL_DTYPE), Some("F32"));
-        assert_eq!(adapted.get_str(metadata_keys::CONVERSION_INFO), Some("upcast to F32"));
+        assert_eq!(
+            adapted.get_str(metadata_keys::CONVERSION_INFO),
+            Some("upcast to F32")
+        );
     }
 
     #[test]
     fn test_prepare_export_metadata_no_original() {
-        let adapted = prepare_export_metadata(
-            None,
-            BlockFormat::B8x4,
-            Some("created from scratch"),
-        );
+        let adapted =
+            prepare_export_metadata(None, BlockFormat::B8x4, Some("created from scratch"));
 
         assert_eq!(adapted.get_str(metadata_keys::BLOCK_FORMAT), Some("B8x4"));
-        assert_eq!(adapted.get_str(metadata_keys::CONVERSION_INFO), Some("created from scratch"));
+        assert_eq!(
+            adapted.get_str(metadata_keys::CONVERSION_INFO),
+            Some("created from scratch")
+        );
         assert!(adapted.get_str(metadata_keys::CREATED_AT).is_some());
     }
 
@@ -218,9 +216,21 @@ mod tests {
         assert_eq!(block_format_to_string(BlockFormat::B8x8), "B8x8");
         assert_eq!(block_format_to_string(BlockFormat::B16x4), "B16x4");
         assert_eq!(block_format_to_string(BlockFormat::B16x8), "B16x8");
-        assert_eq!(block_format_to_string(BlockFormat::DualRow8x4), "DualRow8x4");
-        assert_eq!(block_format_to_string(BlockFormat::DualRow8x8), "DualRow8x8");
-        assert_eq!(block_format_to_string(BlockFormat::DualRow16x4), "DualRow16x4");
-        assert_eq!(block_format_to_string(BlockFormat::DualRow16x8), "DualRow16x8");
+        assert_eq!(
+            block_format_to_string(BlockFormat::DualRow8x4),
+            "DualRow8x4"
+        );
+        assert_eq!(
+            block_format_to_string(BlockFormat::DualRow8x8),
+            "DualRow8x8"
+        );
+        assert_eq!(
+            block_format_to_string(BlockFormat::DualRow16x4),
+            "DualRow16x4"
+        );
+        assert_eq!(
+            block_format_to_string(BlockFormat::DualRow16x8),
+            "DualRow16x8"
+        );
     }
 }

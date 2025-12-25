@@ -1,8 +1,8 @@
 //! K-Quant scale computation and packing
 
-use half::f16;
+use super::super::utils::{compute_group_scales_i8, compute_group_scales_u8, fast_exp2};
 use crate::blocks::AnyBlock;
-use super::super::utils::{fast_exp2, compute_group_scales_u8, compute_group_scales_i8};
+use half::f16;
 
 //=============================================================================
 // Q4_K Scale Packing (12 bytes for 8 groups)
@@ -63,11 +63,7 @@ pub fn compute_scales_standard(
 
 /// Q6_K scales (16 groups, signed 8-bit)
 #[inline]
-pub fn compute_q6k_scales(
-    gmat_blocks: &[&AnyBlock],
-    d: f16,
-    gmat_block_size: usize,
-) -> [i8; 16] {
+pub fn compute_q6k_scales(gmat_blocks: &[&AnyBlock], d: f16, gmat_block_size: usize) -> [i8; 16] {
     compute_group_scales_i8::<16, _>(gmat_blocks, d, gmat_block_size, 16, |log2_max, d_f32| {
         let max_abs = fast_exp2(log2_max);
         let scale = (max_abs / (31.0 * d_f32)).round().clamp(-128.0, 127.0) as i8;
@@ -77,11 +73,7 @@ pub fn compute_q6k_scales(
 
 /// Q2_K scales (16 groups, 4-bit unsigned)
 #[inline]
-pub fn compute_q2k_scales(
-    gmat_blocks: &[&AnyBlock],
-    d: f16,
-    gmat_block_size: usize,
-) -> [u8; 16] {
+pub fn compute_q2k_scales(gmat_blocks: &[&AnyBlock], d: f16, gmat_block_size: usize) -> [u8; 16] {
     let log2_d = f32::from(d).log2();
     compute_group_scales_u8::<16, _>(gmat_blocks, d, gmat_block_size, 16, |log2_max, _d_f32| {
         let scale = fast_exp2(log2_max - log2_d);
@@ -91,11 +83,7 @@ pub fn compute_q2k_scales(
 
 /// Q3_K scales (16 groups, signed)
 #[inline]
-pub fn compute_q3k_scales(
-    gmat_blocks: &[&AnyBlock],
-    d: f16,
-    gmat_block_size: usize,
-) -> [i8; 16] {
+pub fn compute_q3k_scales(gmat_blocks: &[&AnyBlock], d: f16, gmat_block_size: usize) -> [i8; 16] {
     compute_group_scales_i8::<16, _>(gmat_blocks, d, gmat_block_size, 16, |log2_max, d_f32| {
         let max_abs = fast_exp2(log2_max);
         let scale = (max_abs / (3.0 * d_f32)).round().clamp(-128.0, 127.0) as i8;

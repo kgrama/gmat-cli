@@ -8,7 +8,7 @@
 //! Supports activation-aware quantization when ActivationStats are provided.
 
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{Device, Tensor, Result};
+use candle_core::{Device, Result, Tensor};
 use half::f16;
 
 use super::pack_simple::quantize_simple_packed;
@@ -19,7 +19,7 @@ use super::types::{ActivationStats, PackFormat, QuantDType, QuantParams, Quantiz
 /// When activation_stats is provided, weights in channels with higher activations
 /// get tighter scales (more precision) based on importance = |weight| × |activation|.
 fn compute_group_scale(
-    values: &[(usize, f32)],  // (channel_idx, weight_value)
+    values: &[(usize, f32)], // (channel_idx, weight_value)
     clip_percentile: f32,
     activation_stats: Option<&ActivationStats>,
 ) -> f32 {
@@ -70,9 +70,11 @@ fn compute_group_scale(
         // But we need to convert back to weight scale
         // importance = weight × activation, so weight = importance / activation
         // For the group, use the mean activation scale
-        let mean_act: f32 = values.iter()
+        let mean_act: f32 = values
+            .iter()
             .map(|&(ch, _)| act_stats.scale(ch))
-            .sum::<f32>() / values.len() as f32;
+            .sum::<f32>()
+            / values.len() as f32;
 
         let effective_weight_max = if mean_act > 0.0 {
             effective_max / mean_act
@@ -80,7 +82,11 @@ fn compute_group_scale(
             effective_max
         };
 
-        if effective_weight_max > 0.0 { effective_weight_max / 7.0 } else { 1.0 }
+        if effective_weight_max > 0.0 {
+            effective_weight_max / 7.0
+        } else {
+            1.0
+        }
     } else {
         // Standard weight-only scale computation
         let mut max_abs = 0.0f32;
@@ -113,7 +119,11 @@ fn compute_group_scale(
             }
         }
 
-        if max_abs > 0.0 { max_abs / 7.0 } else { 1.0 }
+        if max_abs > 0.0 {
+            max_abs / 7.0
+        } else {
+            1.0
+        }
     }
 }
 
@@ -136,7 +146,15 @@ pub fn quantize_awq(
     device: &Device,
 ) -> Result<QuantizedTensors> {
     if dtype != QuantDType::I4 {
-        return quantize_simple_packed(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device);
+        return quantize_simple_packed(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            device,
+        );
     }
 
     let (rows, cols) = matrix.shape();
@@ -164,7 +182,8 @@ pub fn quantize_awq(
             let group_vals: Vec<(usize, f32)> = (start..end)
                 .map(|in_idx| (in_idx, dense[out_idx * in_features + in_idx]))
                 .collect();
-            scales_data[out_idx * num_groups + g] = compute_group_scale(&group_vals, clip_percentile, activation_stats);
+            scales_data[out_idx * num_groups + g] =
+                compute_group_scale(&group_vals, clip_percentile, activation_stats);
         }
     }
 
@@ -211,7 +230,8 @@ pub fn quantize_awq(
     let mut scales_f16 = vec![f16::ZERO; num_groups * out_features];
     for out_idx in 0..out_features {
         for g in 0..num_groups {
-            scales_f16[g * out_features + out_idx] = f16::from_f32(scales_data[out_idx * num_groups + g]);
+            scales_f16[g * out_features + out_idx] =
+                f16::from_f32(scales_data[out_idx * num_groups + g]);
         }
     }
 

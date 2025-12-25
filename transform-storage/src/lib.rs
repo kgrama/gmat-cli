@@ -37,10 +37,15 @@ mod graph_matrix_tests;
 
 // Re-exports
 pub use block::Block;
-pub use blocks::{Block16x8, Block16x4, Block8x8, Block8x4, BlockFormat};
+pub use blocks::{Block16x4, Block16x8, Block8x4, Block8x8, BlockFormat};
 pub use config::{AnyGraphMatrix, StorageConfig};
-pub use conversions::{CooMatrix, CsrMatrix, LogSparseMatrix, LogSparseCsrMatrix, QuantDType, QuantParams, QuantizedTensors, PackFormat, quantize, quantize_with_center, extract_metadata, extract_metadata_from_bytes, prepare_export_metadata, prepare_export_metadata_with_dtype};
-pub use formats::{GmatHeader, GmatMetadata, metadata_keys, GMAT_MAGIC, GMAT_VERSION, GMAT_VERSION_V1, GMAT_VERSION_V2};
+pub use conversions::{
+    extract_metadata, extract_metadata_from_bytes, prepare_export_metadata,
+    prepare_export_metadata_with_dtype, quantize, quantize_with_center, CooMatrix, CsrMatrix,
+    LogSparseCsrMatrix, LogSparseMatrix, PackFormat, QuantDType, QuantParams, QuantizedTensors,
+};
+pub use formats::{
+    metadata_keys, GmatHeader, GmatMetadata, GMAT_MAGIC, GMAT_VERSION, GMAT_VERSION_V1,
+    GMAT_VERSION_V2,
+};
 pub use graph_matrix::GraphMatrix;
-
-

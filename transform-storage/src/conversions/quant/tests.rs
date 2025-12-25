@@ -10,7 +10,14 @@ fn test_packed_i4() {
     let data: Vec<f32> = vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0];
     let matrix = GraphMatrix::from_dense(&data, (1, 8), BlockFormat::B8x8);
 
-    let result = quantize(&matrix, QuantDType::I4, PackFormat::Packed, 0.0, &Device::Cpu).unwrap();
+    let result = quantize(
+        &matrix,
+        QuantDType::I4,
+        PackFormat::Packed,
+        0.0,
+        &Device::Cpu,
+    )
+    .unwrap();
 
     assert_eq!(result.weights.dims(), &[1, 4]); // 8 values → 4 bytes
     assert_eq!(result.weights.dtype(), DType::U8);
@@ -22,7 +29,14 @@ fn test_packed_i8() {
     let data: Vec<f32> = vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0];
     let matrix = GraphMatrix::from_dense(&data, (1, 8), BlockFormat::B8x8);
 
-    let result = quantize(&matrix, QuantDType::I8, PackFormat::Packed, 0.0, &Device::Cpu).unwrap();
+    let result = quantize(
+        &matrix,
+        QuantDType::I8,
+        PackFormat::Packed,
+        0.0,
+        &Device::Cpu,
+    )
+    .unwrap();
 
     assert_eq!(result.weights.dims(), &[1, 8]);
     assert_eq!(result.weights.dtype(), DType::U8);
@@ -82,7 +96,14 @@ fn test_f16_passthrough() {
     let data: Vec<f32> = vec![1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0];
     let matrix = GraphMatrix::from_dense(&data, (1, 8), BlockFormat::B8x8);
 
-    let result = quantize(&matrix, QuantDType::F16, PackFormat::None, 0.0, &Device::Cpu).unwrap();
+    let result = quantize(
+        &matrix,
+        QuantDType::F16,
+        PackFormat::None,
+        0.0,
+        &Device::Cpu,
+    )
+    .unwrap();
 
     assert_eq!(result.weights.dims(), &[1, 8]);
     assert_eq!(result.weights.dtype(), DType::F16);
@@ -94,7 +115,12 @@ fn test_all_pack_formats() {
     let data: Vec<f32> = (0..256).map(|x| x as f32 / 100.0).collect();
     let matrix = GraphMatrix::from_dense(&data, (2, 128), BlockFormat::B16x8);
 
-    for pack in [PackFormat::None, PackFormat::Packed, PackFormat::Awq, PackFormat::Gptq] {
+    for pack in [
+        PackFormat::None,
+        PackFormat::Packed,
+        PackFormat::Awq,
+        PackFormat::Gptq,
+    ] {
         let result = quantize(&matrix, QuantDType::I4, pack, 0.0, &Device::Cpu).unwrap();
         assert_eq!(result.params.pack_format, pack);
     }
@@ -167,8 +193,8 @@ fn test_activation_stats_importance() {
     let stats = ActivationStats::from_scales(vec![1.0, 10.0, 0.1]);
 
     // importance = |weight| * |activation|
-    assert_eq!(stats.importance(0, 2.0), 2.0);   // 2.0 * 1.0
-    assert_eq!(stats.importance(1, 2.0), 20.0);  // 2.0 * 10.0
+    assert_eq!(stats.importance(0, 2.0), 2.0); // 2.0 * 1.0
+    assert_eq!(stats.importance(1, 2.0), 20.0); // 2.0 * 10.0
     assert!((stats.importance(2, 2.0) - 0.2).abs() < 1e-6); // 2.0 * 0.1
 }
 
@@ -180,9 +206,7 @@ fn test_quantize_with_activations_awq() {
 
     // Create activation stats - first half of channels have high activation,
     // second half have low activation
-    let act_scales: Vec<f32> = (0..256)
-        .map(|i| if i < 128 { 10.0 } else { 0.1 })
-        .collect();
+    let act_scales: Vec<f32> = (0..256).map(|i| if i < 128 { 10.0 } else { 0.1 }).collect();
     let act_stats = ActivationStats::from_scales(act_scales);
 
     let result = quantize_with_activations(
@@ -192,7 +216,8 @@ fn test_quantize_with_activations_awq() {
         PackFormat::Awq,
         0.0,
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Should produce valid AWQ format
     assert_eq!(result.weights.dims(), &[32, 2]);
@@ -220,7 +245,8 @@ fn test_quantize_with_activations_gptq() {
         PackFormat::Gptq,
         0.0,
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Should produce valid GPTQ format
     assert_eq!(result.weights.dims(), &[32, 2]);
@@ -272,11 +298,15 @@ fn test_activation_aware_vs_standard_produces_different_scales() {
         PackFormat::Awq,
         0.01, // Small clip to trigger importance-based scaling
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Both should have same tensor shapes
     assert_eq!(standard.weights.dims(), aware.weights.dims());
-    assert_eq!(standard.scales.as_ref().unwrap().dims(), aware.scales.as_ref().unwrap().dims());
+    assert_eq!(
+        standard.scales.as_ref().unwrap().dims(),
+        aware.scales.as_ref().unwrap().dims()
+    );
 
     // But the scales should be different due to activation weighting
     // (We can't easily compare tensor values here, but the dimensions confirm the path was taken)
@@ -309,10 +339,10 @@ fn test_static_saliency_from_chained_scales() {
 
     // saliency = upstream × weight
     assert_eq!(saliency.num_channels(), 4);
-    assert_eq!(saliency.saliency(0), 2.0);  // 2.0 × 1.0
-    assert_eq!(saliency.saliency(1), 6.0);  // 3.0 × 2.0
-    assert_eq!(saliency.saliency(2), 4.0);  // 1.0 × 4.0
-    assert_eq!(saliency.saliency(3), 2.0);  // 4.0 × 0.5
+    assert_eq!(saliency.saliency(0), 2.0); // 2.0 × 1.0
+    assert_eq!(saliency.saliency(1), 6.0); // 3.0 × 2.0
+    assert_eq!(saliency.saliency(2), 4.0); // 1.0 × 4.0
+    assert_eq!(saliency.saliency(3), 2.0); // 4.0 × 0.5
 }
 
 #[test]
@@ -326,10 +356,10 @@ fn test_static_saliency_from_chained_log2() {
 
     // saliency = exp2(up + w) = up_linear × w_linear
     assert_eq!(saliency.num_channels(), 4);
-    assert!((saliency.saliency(0) - 2.0).abs() < 1e-6);  // 1 × 2
-    assert!((saliency.saliency(1) - 2.0).abs() < 1e-6);  // 2 × 1
-    assert!((saliency.saliency(2) - 2.0).abs() < 1e-6);  // 0.5 × 4
-    assert!((saliency.saliency(3) - 2.0).abs() < 1e-6);  // 4 × 0.5
+    assert!((saliency.saliency(0) - 2.0).abs() < 1e-6); // 1 × 2
+    assert!((saliency.saliency(1) - 2.0).abs() < 1e-6); // 2 × 1
+    assert!((saliency.saliency(2) - 2.0).abs() < 1e-6); // 0.5 × 4
+    assert!((saliency.saliency(3) - 2.0).abs() < 1e-6); // 4 × 0.5
 }
 
 #[test]
@@ -337,8 +367,8 @@ fn test_static_saliency_importance() {
     let saliency = StaticSaliency::from_column_scales(vec![1.0, 10.0, 0.1]);
 
     // importance = |weight| × saliency
-    assert_eq!(saliency.importance(0, 2.0), 2.0);   // 2.0 × 1.0
-    assert_eq!(saliency.importance(1, 2.0), 20.0);  // 2.0 × 10.0
+    assert_eq!(saliency.importance(0, 2.0), 2.0); // 2.0 × 1.0
+    assert_eq!(saliency.importance(1, 2.0), 20.0); // 2.0 × 10.0
     assert!((saliency.importance(2, 2.0) - 0.2).abs() < 1e-6); // 2.0 × 0.1
 }
 
@@ -360,9 +390,7 @@ fn test_quantize_with_saliency_awq() {
     let matrix = GraphMatrix::from_dense(&data, (2, 256), BlockFormat::B16x8);
 
     // Create saliency from "block scales" - first half important, second half not
-    let col_scales: Vec<f32> = (0..256)
-        .map(|i| if i < 128 { 10.0 } else { 0.1 })
-        .collect();
+    let col_scales: Vec<f32> = (0..256).map(|i| if i < 128 { 10.0 } else { 0.1 }).collect();
     let saliency = StaticSaliency::from_column_scales(col_scales);
 
     let result = quantize_with_saliency(
@@ -372,7 +400,8 @@ fn test_quantize_with_saliency_awq() {
         PackFormat::Awq,
         0.0,
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Should produce valid AWQ format
     assert_eq!(result.weights.dims(), &[32, 2]);
@@ -399,7 +428,8 @@ fn test_quantize_with_saliency_gptq() {
         PackFormat::Gptq,
         0.0,
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Should produce valid GPTQ format
     assert_eq!(result.weights.dims(), &[32, 2]);
@@ -430,9 +460,13 @@ fn test_saliency_vs_standard_produces_different_output() {
         PackFormat::Awq,
         0.01,
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Same shapes
     assert_eq!(standard.weights.dims(), salient.weights.dims());
-    assert_eq!(standard.scales.as_ref().unwrap().dims(), salient.scales.as_ref().unwrap().dims());
+    assert_eq!(
+        standard.scales.as_ref().unwrap().dims(),
+        salient.scales.as_ref().unwrap().dims()
+    );
 }

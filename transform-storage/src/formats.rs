@@ -133,7 +133,10 @@ impl GmatHeader {
         if magic != GMAT_MAGIC {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("Invalid GMAT magic: expected {:?}, got {:?}", GMAT_MAGIC, magic),
+                format!(
+                    "Invalid GMAT magic: expected {:?}, got {:?}",
+                    GMAT_MAGIC, magic
+                ),
             ));
         }
 
@@ -154,7 +157,7 @@ impl GmatHeader {
         let mut format_byte = [0u8; 1];
         r.read_exact(&mut format_byte)?;
         let format = format_byte[0];
-        
+
         // Validate format is one of the known values (0-7 for single and dual-row formats)
         if format > 7 {
             return Err(io::Error::new(
@@ -264,12 +267,14 @@ impl GmatMetadata {
 
     /// Set a string value
     pub fn set_str(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.inner.insert(key.into(), serde_json::Value::String(value.into()));
+        self.inner
+            .insert(key.into(), serde_json::Value::String(value.into()));
     }
 
     /// Set an integer value
     pub fn set_i64(&mut self, key: impl Into<String>, value: i64) {
-        self.inner.insert(key.into(), serde_json::Value::Number(value.into()));
+        self.inner
+            .insert(key.into(), serde_json::Value::Number(value.into()));
     }
 
     /// Set an unsigned integer value
@@ -286,7 +291,8 @@ impl GmatMetadata {
 
     /// Set a bool value
     pub fn set_bool(&mut self, key: impl Into<String>, value: bool) {
-        self.inner.insert(key.into(), serde_json::Value::Bool(value));
+        self.inner
+            .insert(key.into(), serde_json::Value::Bool(value));
     }
 
     /// Set a raw JSON value
@@ -326,8 +332,7 @@ impl GmatMetadata {
 
     /// Serialize metadata to JSON bytes
     pub fn to_json_bytes(&self) -> io::Result<Vec<u8>> {
-        serde_json::to_vec(&self.inner)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_json::to_vec(&self.inner).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Deserialize metadata from JSON bytes

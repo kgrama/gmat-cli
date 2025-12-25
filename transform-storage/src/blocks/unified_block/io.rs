@@ -1,10 +1,10 @@
 //! I/O serialization for UnifiedBlock
 
-use std::io::{Read, Write, Result};
-use half::f16;
-use super::{UnifiedBlock, EncodeHelper};
 use super::super::configs::BlockConfig;
 use super::super::traits::ElementMask;
+use super::{EncodeHelper, UnifiedBlock};
+use half::f16;
+use std::io::{Read, Result, Write};
 use std::marker::PhantomData;
 
 impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
@@ -43,7 +43,7 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
 
         // Check if empty
         let is_empty = (0..ROWS).all(|i| zero_map[i] == C::Mask::default());
-        
+
         if is_empty {
             return Ok(Self::new_empty());
         }

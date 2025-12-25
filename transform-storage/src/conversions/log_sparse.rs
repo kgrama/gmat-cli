@@ -45,10 +45,22 @@ impl LogSparseMatrix {
         col_indices: Vec<usize>,
         shape: (usize, usize),
     ) -> Self {
-        assert_eq!(log2_values.len(), signs.len(), "log2_values and signs must have same length");
-        assert_eq!(log2_values.len(), row_indices.len(), "log2_values and row_indices must have same length");
-        assert_eq!(log2_values.len(), col_indices.len(), "log2_values and col_indices must have same length");
-        
+        assert_eq!(
+            log2_values.len(),
+            signs.len(),
+            "log2_values and signs must have same length"
+        );
+        assert_eq!(
+            log2_values.len(),
+            row_indices.len(),
+            "log2_values and row_indices must have same length"
+        );
+        assert_eq!(
+            log2_values.len(),
+            col_indices.len(),
+            "log2_values and col_indices must have same length"
+        );
+
         Self {
             log2_values,
             signs,
@@ -63,7 +75,8 @@ impl LogSparseMatrix {
     /// Reconstructs linear values as: value = sign_multiplier * 2^log2_value
     /// where sign_multiplier = 1.0 for sign=0, -1.0 for sign=1.
     pub fn to_linear(&self) -> CooMatrix {
-        let values: Vec<f32> = self.log2_values
+        let values: Vec<f32> = self
+            .log2_values
             .iter()
             .zip(self.signs.iter())
             .map(|(&log_val, &sign)| {
@@ -141,12 +154,28 @@ impl LogSparseCsrMatrix {
         row_ptr: Vec<usize>,
         shape: (usize, usize),
     ) -> Self {
-        assert_eq!(log2_values.len(), signs.len(), "log2_values and signs must have same length");
-        assert_eq!(log2_values.len(), col_indices.len(), "log2_values and col_indices must have same length");
-        assert_eq!(row_ptr.len(), shape.0 + 1, "row_ptr must have length num_rows + 1");
+        assert_eq!(
+            log2_values.len(),
+            signs.len(),
+            "log2_values and signs must have same length"
+        );
+        assert_eq!(
+            log2_values.len(),
+            col_indices.len(),
+            "log2_values and col_indices must have same length"
+        );
+        assert_eq!(
+            row_ptr.len(),
+            shape.0 + 1,
+            "row_ptr must have length num_rows + 1"
+        );
         assert_eq!(*row_ptr.first().unwrap(), 0, "row_ptr must start at 0");
-        assert_eq!(*row_ptr.last().unwrap(), log2_values.len(), "row_ptr must end at values.len()");
-        
+        assert_eq!(
+            *row_ptr.last().unwrap(),
+            log2_values.len(),
+            "row_ptr must end at values.len()"
+        );
+
         Self {
             log2_values,
             signs,
@@ -161,7 +190,8 @@ impl LogSparseCsrMatrix {
     /// Reconstructs linear values as: value = sign_multiplier * 2^log2_value
     /// where sign_multiplier = 1.0 for sign=0, -1.0 for sign=1.
     pub fn to_linear(&self) -> CsrMatrix {
-        let values: Vec<f32> = self.log2_values
+        let values: Vec<f32> = self
+            .log2_values
             .iter()
             .zip(self.signs.iter())
             .map(|(&log_val, &sign)| {
@@ -219,7 +249,7 @@ mod tests {
         );
 
         let coo = log_sparse.to_linear();
-        
+
         assert_eq!(coo.values.len(), 3);
         assert!((coo.values[0] - 2.0).abs() < 1e-6);
         assert!((coo.values[1] - (-4.0)).abs() < 1e-6);
@@ -255,7 +285,7 @@ mod tests {
         );
 
         let csr = log_sparse_csr.to_linear();
-        
+
         assert_eq!(csr.values.len(), 3);
         assert!((csr.values[0] - 2.0).abs() < 1e-6);
         assert!((csr.values[1] - (-4.0)).abs() < 1e-6);
@@ -269,13 +299,7 @@ mod tests {
         // log2_values: [-1.0] -> magnitude: 2^(-1) = 0.5
         // signs: [1] -> negative
         // Expected: -0.5
-        let log_sparse = LogSparseMatrix::new(
-            vec![-1.0],
-            vec![1],
-            vec![0],
-            vec![0],
-            (1, 1),
-        );
+        let log_sparse = LogSparseMatrix::new(vec![-1.0], vec![1], vec![0], vec![0], (1, 1));
 
         let coo = log_sparse.to_linear();
         assert!((coo.values[0] - (-0.5)).abs() < 1e-6);
@@ -283,13 +307,7 @@ mod tests {
 
     #[test]
     fn test_empty_log_sparse() {
-        let log_sparse = LogSparseMatrix::new(
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            (3, 3),
-        );
+        let log_sparse = LogSparseMatrix::new(vec![], vec![], vec![], vec![], (3, 3));
 
         let coo = log_sparse.to_linear();
         assert_eq!(coo.nnz(), 0);

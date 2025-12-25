@@ -41,8 +41,8 @@ pub fn load_gmat_model(model_path: &str) -> Result<(PathBuf, serde_json::Value)>
     let metadata_json = fs::read_to_string(&metadata_path)
         .with_context(|| format!("Failed to read metadata.json in {}", model_path))?;
 
-    let metadata: serde_json::Value = serde_json::from_str(&metadata_json)
-        .context("Failed to parse metadata.json")?;
+    let metadata: serde_json::Value =
+        serde_json::from_str(&metadata_json).context("Failed to parse metadata.json")?;
 
     Ok((model_dir.to_path_buf(), metadata))
 }
@@ -50,14 +50,16 @@ pub fn load_gmat_model(model_path: &str) -> Result<(PathBuf, serde_json::Value)>
 /// Load a JSON config file, requiring it to exist.
 pub fn load_config<T: DeserializeOwned>(config_path: Option<&str>, config_name: &str) -> Result<T> {
     let path = config_path.ok_or_else(|| {
-        anyhow::anyhow!("--config is required. Use --generate-config to create {}", config_name)
+        anyhow::anyhow!(
+            "--config is required. Use --generate-config to create {}",
+            config_name
+        )
     })?;
 
-    let json = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config: {}", path))?;
+    let json =
+        fs::read_to_string(path).with_context(|| format!("Failed to read config: {}", path))?;
 
-    serde_json::from_str(&json)
-        .with_context(|| format!("Failed to parse config: {}", path))
+    serde_json::from_str(&json).with_context(|| format!("Failed to parse config: {}", path))
 }
 
 /// Convert raw bytes to f32 based on dtype.
@@ -67,39 +69,48 @@ pub fn bytes_to_f32(data: &[u8], dtype: safetensors::Dtype, count: usize) -> Res
     match dtype {
         Dtype::F32 => {
             if data.len() != count * 4 {
-                anyhow::bail!("F32 size mismatch: expected {} bytes, got {}", count * 4, data.len());
+                anyhow::bail!(
+                    "F32 size mismatch: expected {} bytes, got {}",
+                    count * 4,
+                    data.len()
+                );
             }
             data.chunks_exact(4)
-                .map(|c| -> Result<f32> {
-                    Ok(f32::from_le_bytes(c.try_into()?))
-                })
+                .map(|c| -> Result<f32> { Ok(f32::from_le_bytes(c.try_into()?)) })
                 .collect::<Result<Vec<f32>>>()
         }
         Dtype::F16 => convert_f16_to_f32(data, count),
         Dtype::BF16 => convert_bf16_to_f32(data, count),
-        _ => anyhow::bail!("Unsupported dtype: {:?}. Only F32, F16, BF16 supported.", dtype),
+        _ => anyhow::bail!(
+            "Unsupported dtype: {:?}. Only F32, F16, BF16 supported.",
+            dtype
+        ),
     }
 }
 
 fn convert_f16_to_f32(data: &[u8], count: usize) -> Result<Vec<f32>> {
     if data.len() != count * 2 {
-        anyhow::bail!("F16 size mismatch: expected {} bytes, got {}", count * 2, data.len());
+        anyhow::bail!(
+            "F16 size mismatch: expected {} bytes, got {}",
+            count * 2,
+            data.len()
+        );
     }
     // Safety: We verified the length, and f16 is 2 bytes
-    let slice = unsafe {
-        std::slice::from_raw_parts(data.as_ptr() as *const half::f16, count)
-    };
+    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const half::f16, count) };
     Ok(slice.iter().map(|v| v.to_f32()).collect())
 }
 
 fn convert_bf16_to_f32(data: &[u8], count: usize) -> Result<Vec<f32>> {
     if data.len() != count * 2 {
-        anyhow::bail!("BF16 size mismatch: expected {} bytes, got {}", count * 2, data.len());
+        anyhow::bail!(
+            "BF16 size mismatch: expected {} bytes, got {}",
+            count * 2,
+            data.len()
+        );
     }
     // Safety: We verified the length, and bf16 is 2 bytes
-    let slice = unsafe {
-        std::slice::from_raw_parts(data.as_ptr() as *const half::bf16, count)
-    };
+    let slice = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const half::bf16, count) };
     Ok(slice.iter().map(|v| v.to_f32()).collect())
 }
 
@@ -129,7 +140,12 @@ mod tests {
 
         let result = discover_safetensor_files(&file_path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Expected .safetensors file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Expected .safetensors file")
+        );
     }
 
     #[test]
@@ -152,14 +168,24 @@ mod tests {
 
         let result = discover_safetensor_files(dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No .safetensors files found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No .safetensors files found")
+        );
     }
 
     #[test]
     fn test_discover_nonexistent_path_fails() {
         let result = discover_safetensor_files(Path::new("/nonexistent/path"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Path does not exist"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Path does not exist")
+        );
     }
 
     // ==================== load_gmat_model tests ====================
@@ -184,7 +210,12 @@ mod tests {
 
         let result = load_gmat_model(file_path.to_str().unwrap());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be a directory"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must be a directory")
+        );
     }
 
     #[test]
@@ -220,7 +251,8 @@ mod tests {
             value: i32,
         }
 
-        let config: TestConfig = load_config(Some(config_path.to_str().unwrap()), "config.json").unwrap();
+        let config: TestConfig =
+            load_config(Some(config_path.to_str().unwrap()), "config.json").unwrap();
         assert_eq!(config.name, "test");
         assert_eq!(config.value, 42);
     }
@@ -232,7 +264,12 @@ mod tests {
 
         let result: Result<TestConfig> = load_config(None, "my_config.json");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("--config is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("--config is required")
+        );
     }
 
     #[test]
@@ -240,7 +277,8 @@ mod tests {
         #[derive(serde::Deserialize)]
         struct TestConfig {}
 
-        let result: Result<TestConfig> = load_config(Some("/nonexistent/config.json"), "config.json");
+        let result: Result<TestConfig> =
+            load_config(Some("/nonexistent/config.json"), "config.json");
         assert!(result.is_err());
     }
 
@@ -271,13 +309,8 @@ mod tests {
     fn test_bytes_to_f32_f16() {
         use safetensors::Dtype;
 
-        let f16_values: Vec<half::f16> = vec![
-            half::f16::from_f32(1.0),
-            half::f16::from_f32(2.0),
-        ];
-        let bytes: Vec<u8> = f16_values.iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let f16_values: Vec<half::f16> = vec![half::f16::from_f32(1.0), half::f16::from_f32(2.0)];
+        let bytes: Vec<u8> = f16_values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         let result = bytes_to_f32(&bytes, Dtype::F16, 2).unwrap();
         assert!((result[0] - 1.0).abs() < 0.01);
@@ -288,13 +321,9 @@ mod tests {
     fn test_bytes_to_f32_bf16() {
         use safetensors::Dtype;
 
-        let bf16_values: Vec<half::bf16> = vec![
-            half::bf16::from_f32(1.5),
-            half::bf16::from_f32(3.0),
-        ];
-        let bytes: Vec<u8> = bf16_values.iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect();
+        let bf16_values: Vec<half::bf16> =
+            vec![half::bf16::from_f32(1.5), half::bf16::from_f32(3.0)];
+        let bytes: Vec<u8> = bf16_values.iter().flat_map(|v| v.to_le_bytes()).collect();
 
         let result = bytes_to_f32(&bytes, Dtype::BF16, 2).unwrap();
         assert!((result[0] - 1.5).abs() < 0.01);
@@ -308,7 +337,12 @@ mod tests {
         let bytes = vec![0u8; 8];
         let result = bytes_to_f32(&bytes, Dtype::I64, 1);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unsupported dtype"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported dtype")
+        );
     }
 
     #[test]

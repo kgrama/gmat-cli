@@ -100,12 +100,10 @@ mod tests {
         let config = ExportConfig {
             target_format: "gguf".to_string(),
             quantization: Some(QuantizationConfig::default()),
-            tensor_map: vec![
-                TensorExportMapping {
-                    source: "uuid-1234".to_string(),
-                    target: "blk.0.attn_q.weight".to_string(),
-                },
-            ],
+            tensor_map: vec![TensorExportMapping {
+                source: "uuid-1234".to_string(),
+                target: "blk.0.attn_q.weight".to_string(),
+            }],
             shard_size: Some(5_000_000_000),
         };
 

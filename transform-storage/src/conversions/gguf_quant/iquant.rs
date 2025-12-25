@@ -10,8 +10,8 @@
 
 use half::f16;
 
+use super::utils::{group_max_abs, pack_nibble};
 use crate::blocks::AnyBlock;
-use super::utils::{pack_nibble, group_max_abs};
 
 //=============================================================================
 // Configuration
@@ -57,21 +57,21 @@ pub const IQ4_NL_QUANTS: [i8; 16] = [
 /// Midpoints between adjacent IQ4_NL_QUANTS values in log2 domain.
 /// Thresholds[i] = log2((|QUANTS[i]| + |QUANTS[i+1]|) / 2)
 pub const IQ4_NL_LOG2_THRESHOLDS: [f32; 15] = [
-    6.8522818,  // log2((127 + 104) / 2) = log2(115.5)
-    6.5466433,  // log2((104 + 83) / 2) = log2(93.5)
-    6.2094533,  // log2((83 + 65) / 2) = log2(74.0)
-    5.8329900,  // log2((65 + 49) / 2) = log2(57.0)
-    5.3923174,  // log2((49 + 35) / 2) = log2(42.0)
-    4.8329900,  // log2((35 + 22) / 2) = log2(28.5)
-    4.0,        // log2((22 + 10) / 2) = log2(16.0)
-    2.4594316,  // log2((10 + 1) / 2) = log2(5.5)
-    2.8073549,  // log2((1 + 13) / 2) = log2(7.0)
-    4.2479275,  // log2((13 + 25) / 2) = log2(19.0)
-    4.9772799,  // log2((25 + 38) / 2) = log2(31.5)
-    5.5076081,  // log2((38 + 53) / 2) = log2(45.5)
-    5.9307373,  // log2((53 + 69) / 2) = log2(61.0)
-    6.3038369,  // log2((69 + 89) / 2) = log2(79.0)
-    6.6582115,  // log2((89 + 113) / 2) = log2(101.0)
+    6.8522818, // log2((127 + 104) / 2) = log2(115.5)
+    6.5466433, // log2((104 + 83) / 2) = log2(93.5)
+    6.2094533, // log2((83 + 65) / 2) = log2(74.0)
+    5.8329900, // log2((65 + 49) / 2) = log2(57.0)
+    5.3923174, // log2((49 + 35) / 2) = log2(42.0)
+    4.8329900, // log2((35 + 22) / 2) = log2(28.5)
+    4.0,       // log2((22 + 10) / 2) = log2(16.0)
+    2.4594316, // log2((10 + 1) / 2) = log2(5.5)
+    2.8073549, // log2((1 + 13) / 2) = log2(7.0)
+    4.2479275, // log2((13 + 25) / 2) = log2(19.0)
+    4.9772799, // log2((25 + 38) / 2) = log2(31.5)
+    5.5076081, // log2((38 + 53) / 2) = log2(45.5)
+    5.9307373, // log2((53 + 69) / 2) = log2(61.0)
+    6.3038369, // log2((69 + 89) / 2) = log2(79.0)
+    6.6582115, // log2((89 + 113) / 2) = log2(101.0)
 ];
 
 /// Find the IQ4_NL index that best represents the target value
@@ -101,7 +101,11 @@ fn find_nearest_iq4nl(target: f32) -> u8 {
         let dist_lo = (target - IQ4_NL_QUANTS[lo - 1] as f32).abs();
         let dist_hi = (target - IQ4_NL_QUANTS[lo] as f32).abs();
         // When equidistant, prefer the less extreme (higher index) value
-        if dist_lo < dist_hi { (lo - 1) as u8 } else { lo as u8 }
+        if dist_lo < dist_hi {
+            (lo - 1) as u8
+        } else {
+            lo as u8
+        }
     }
 }
 
@@ -110,11 +114,11 @@ fn find_nearest_iq4nl(target: f32) -> u8 {
 #[inline]
 fn find_nearest_iq4nl_log2(log2_mag: f32, log2_scale: f32) -> u8 {
     let normalized = log2_mag - log2_scale;
-    
+
     // Binary search in log2 thresholds
     let mut lo = 0;
     let mut hi = 15;
-    
+
     while lo < hi {
         let mid = (lo + hi) / 2;
         if normalized > IQ4_NL_LOG2_THRESHOLDS[mid] {
@@ -123,70 +127,109 @@ fn find_nearest_iq4nl_log2(log2_mag: f32, log2_scale: f32) -> u8 {
             hi = mid;
         }
     }
-    
+
     lo as u8
 }
 
 /// Fast IQ4_NL index lookup using unrolled decision tree.
 /// Replaces binary search with fixed 4-comparison decision tree.
-/// 
+///
 /// # Performance
 /// - Guaranteed 4 comparisons (vs ~3.9 average for binary search)
 /// - Better branch prediction due to fixed structure
 /// - No loop overhead
-/// 
+///
 /// # Arguments
 /// - `log2_mag`: log2 of absolute value
 /// - `log2_scale`: log2 of scale factor
-/// 
+///
 /// # Returns
 /// Index (0-15) into IQ4_NL_QUANTS lookup table
 #[inline(always)]
 fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
     let normalized = log2_mag - log2_scale;
-    
+
     // Balanced decision tree: 16 outcomes, 4 levels, 4 comparisons max
     // Thresholds from IQ4_NL_LOG2_THRESHOLDS array
-    if normalized > 2.4594316 {  // THRESHOLDS[7] - root split
+    if normalized > 2.4594316 {
+        // THRESHOLDS[7] - root split
         // Indices 0-7 (higher magnitudes)
-        if normalized > 5.8329900 {  // THRESHOLDS[3]
+        if normalized > 5.8329900 {
+            // THRESHOLDS[3]
             // Indices 0-3
-            if normalized > 6.5466433 {  // THRESHOLDS[1]
+            if normalized > 6.5466433 {
+                // THRESHOLDS[1]
                 // Indices 0-1
-                if normalized > 6.8522818 { 0 } else { 1 }  // THRESHOLDS[0]
+                if normalized > 6.8522818 {
+                    0
+                } else {
+                    1
+                } // THRESHOLDS[0]
             } else {
                 // Indices 2-3
-                if normalized > 6.2094533 { 2 } else { 3 }  // THRESHOLDS[2]
+                if normalized > 6.2094533 {
+                    2
+                } else {
+                    3
+                } // THRESHOLDS[2]
             }
         } else {
             // Indices 4-7
-            if normalized > 4.8329900 {  // THRESHOLDS[5]
+            if normalized > 4.8329900 {
+                // THRESHOLDS[5]
                 // Indices 4-5
-                if normalized > 5.3923174 { 4 } else { 5 }  // THRESHOLDS[4]
+                if normalized > 5.3923174 {
+                    4
+                } else {
+                    5
+                } // THRESHOLDS[4]
             } else {
                 // Indices 6-7
-                if normalized > 4.0 { 6 } else { 7 }  // THRESHOLDS[6]
+                if normalized > 4.0 {
+                    6
+                } else {
+                    7
+                } // THRESHOLDS[6]
             }
         }
     } else {
         // Indices 8-15 (lower magnitudes)
-        if normalized > 5.5076081 {  // THRESHOLDS[11]
+        if normalized > 5.5076081 {
+            // THRESHOLDS[11]
             // Indices 8-11
-            if normalized > 4.2479275 {  // THRESHOLDS[9]
+            if normalized > 4.2479275 {
+                // THRESHOLDS[9]
                 // Indices 8-9
-                if normalized > 2.8073549 { 8 } else { 9 }  // THRESHOLDS[8]
+                if normalized > 2.8073549 {
+                    8
+                } else {
+                    9
+                } // THRESHOLDS[8]
             } else {
                 // Indices 10-11
-                if normalized > 4.9772799 { 10 } else { 11 }  // THRESHOLDS[10]
+                if normalized > 4.9772799 {
+                    10
+                } else {
+                    11
+                } // THRESHOLDS[10]
             }
         } else {
             // Indices 12-15
-            if normalized > 6.3038369 {  // THRESHOLDS[13]
+            if normalized > 6.3038369 {
+                // THRESHOLDS[13]
                 // Indices 12-13
-                if normalized > 5.9307373 { 12 } else { 13 }  // THRESHOLDS[12]
+                if normalized > 5.9307373 {
+                    12
+                } else {
+                    13
+                } // THRESHOLDS[12]
             } else {
                 // Indices 14-15
-                if normalized > 6.6582115 { 14 } else { 15 }  // THRESHOLDS[14]
+                if normalized > 6.6582115 {
+                    14
+                } else {
+                    15
+                } // THRESHOLDS[14]
             }
         }
     }
@@ -208,31 +251,31 @@ pub fn dequantize_iq4_nl(d: f16, q: u8) -> f32 {
 pub type Iq4nlE1m7Lut = [u8; 512];
 
 /// Build LUT mapping e1m7 encoded bytes to IQ4_NL indices.
-/// 
+///
 /// # Arguments
 /// - `base_offset`: block.scale_log - d.log2() (shared across block)
-/// 
+///
 /// The LUT maps raw e1m7 byte values directly to IQ4_NL indices,
 /// avoiding per-element log2 arithmetic.
 #[inline]
 pub fn build_iq4nl_lut_e1m7(base_offset: f32) -> Iq4nlE1m7Lut {
     let mut lut = [0u8; 512];
-    
+
     for raw in 0..256u16 {
         // Decode e1m7: e = raw >> 7, m = (raw & 0x7F) / 128.0, offset = e + m
         let e = (raw >> 7) as f32;
         let m = (raw & 0x7F) as f32 / 128.0;
         let log2_offset = e + m;
-        
+
         // Non-shifted entry
         let normalized = base_offset + log2_offset;
         lut[raw as usize] = find_iq4nl_index_fast(normalized, 0.0);
-        
+
         // Shifted entry (+2.0 octaves from shift_map bit)
         let normalized_shifted = base_offset + log2_offset + 2.0;
         lut[256 + raw as usize] = find_iq4nl_index_fast(normalized_shifted, 0.0);
     }
-    
+
     lut
 }
 
@@ -284,8 +327,6 @@ pub fn decode_iq4xs_scales(scales_h: u16, scales_l: &[u8; 4]) -> [u8; 8] {
 // Shared Utilities
 //=============================================================================
 
-
-
 //=============================================================================
 // Generic I-Quant Block Encoder
 //=============================================================================
@@ -330,7 +371,7 @@ pub fn encode_iquant_block(
         } else {
             d_f32
         };
-        
+
         // Compute log2_scale once per group for log-domain quantization
         let log2_scale = if effective_scale.abs() > 1e-10 {
             effective_scale.log2()
@@ -364,9 +405,11 @@ pub fn encode_iquant_block(
 
                     // Direct LUT lookup for all elements
                     for idx in 0..gmat_block_size {
-                        let lut_idx = mags[idx] as usize + if (shift_map >> idx) & 1 != 0 { 256 } else { 0 };
+                        let lut_idx =
+                            mags[idx] as usize + if (shift_map >> idx) & 1 != 0 { 256 } else { 0 };
                         let q = lut[lut_idx];
-                        let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
+                        let elem_idx =
+                            g * config.elements_per_group + blk_idx * gmat_block_size + idx;
                         pack_nibble(output, config.quants_offset, elem_idx, q);
                     }
                     continue; // Skip fallback path
@@ -436,19 +479,23 @@ pub fn encode_iq4nl_block(
 
 /// Compute IQ4_XS scales from GMAT blocks
 #[inline]
-pub fn compute_iq4xs_scales(
-    gmat_blocks: &[&AnyBlock],
-    d: f16,
-    gmat_block_size: usize,
-) -> [u8; 8] {
+pub fn compute_iq4xs_scales(gmat_blocks: &[&AnyBlock], d: f16, gmat_block_size: usize) -> [u8; 8] {
     // IQ4_NL range is [-127, 113], effective range ~240
     let iq4_range = (IQ4_NL_QUANTS[15] - IQ4_NL_QUANTS[0]) as f32;
 
-    super::utils::compute_group_scales_u8::<8, _>(gmat_blocks, d, gmat_block_size, 32, |log2_max, d_f32| {
-        let max_abs = super::utils::fast_exp2(log2_max);
-        let scale = (max_abs / (d_f32 * iq4_range / 2.0)).round().clamp(0.0, 63.0) as u8;
-        scale.max(1)
-    })
+    super::utils::compute_group_scales_u8::<8, _>(
+        gmat_blocks,
+        d,
+        gmat_block_size,
+        32,
+        |log2_max, d_f32| {
+            let max_abs = super::utils::fast_exp2(log2_max);
+            let scale = (max_abs / (d_f32 * iq4_range / 2.0))
+                .round()
+                .clamp(0.0, 63.0) as u8;
+            scale.max(1)
+        },
+    )
 }
 
 /// Compute optimal super-scale d for IQ4_NL
@@ -530,7 +577,7 @@ mod tests {
 
         // Test midpoints (should round to closer)
         assert_eq!(find_nearest_iq4nl(-115.5), 1); // between -127 and -104
-        assert_eq!(find_nearest_iq4nl(0.0), 8);    // closest to 1
+        assert_eq!(find_nearest_iq4nl(0.0), 8); // closest to 1
     }
 
     #[test]

@@ -12,12 +12,12 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use transform_storage::conversions::gguf_quant::{
-    compute_tensor_importance, quantize_to_gguf, GgufQuantType, ScaleOptimization,
-};
 use transform_storage::GraphMatrix;
+use transform_storage::conversions::gguf_quant::{
+    GgufQuantType, ScaleOptimization, compute_tensor_importance, quantize_to_gguf,
+};
 
-use crate::workqueue::{run_pipeline, PipelineState};
+use crate::workqueue::{PipelineState, run_pipeline};
 
 /// Represents a tensor entry from metadata - either simple 2D or N-D with planes.
 #[derive(Debug, Clone)]
@@ -37,10 +37,13 @@ impl TensorEntry {
     fn from_json(value: &serde_json::Value) -> Option<Self> {
         if let Some(uuid) = value.as_str() {
             // Simple 2D tensor
-            Some(TensorEntry::Simple { uuid: uuid.to_string() })
+            Some(TensorEntry::Simple {
+                uuid: uuid.to_string(),
+            })
         } else if let Some(obj) = value.as_object() {
             // N-D tensor with planes
-            let original_shape: Vec<usize> = obj.get("original_shape")?
+            let original_shape: Vec<usize> = obj
+                .get("original_shape")?
                 .as_array()?
                 .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as usize))
@@ -52,7 +55,8 @@ impl TensorEntry {
                 matrix_arr.get(1)?.as_u64()? as usize,
             );
 
-            let plane_uuids: Vec<String> = obj.get("plane_uuids")?
+            let plane_uuids: Vec<String> = obj
+                .get("plane_uuids")?
                 .as_array()?
                 .iter()
                 .filter_map(|v| v.as_str().map(String::from))
@@ -67,7 +71,6 @@ impl TensorEntry {
             None
         }
     }
-
 }
 
 /// Find a tensor entry by UUID in the name_to_entry map.
@@ -89,7 +92,11 @@ fn find_tensor_entry(
                 }
                 return Some(QuantizeEntry::Simple { tensor_path });
             }
-            TensorEntry::NdPlanes { plane_uuids, original_shape, matrix_shape } => {
+            TensorEntry::NdPlanes {
+                plane_uuids,
+                original_shape,
+                matrix_shape,
+            } => {
                 // Check if source_uuid matches any plane UUID (for per-plane export)
                 // or the base UUID pattern (first plane UUID without suffix)
                 let base_uuid = plane_uuids.first()?.strip_suffix("_0")?;
@@ -133,7 +140,9 @@ use crate::common::{load_config, load_gmat_model};
 use crate::config::export_config::{ExportConfig, QuantizationConfig, TensorExportMapping};
 
 use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
-use util::{num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name, ImportanceThresholds};
+use util::{
+    ImportanceThresholds, num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name,
+};
 
 /// Tensor analysis result for config generation.
 #[allow(dead_code)]
@@ -197,7 +206,12 @@ fn analyze_model_tensors(
                     let shape = matrix.shape();
                     (uuid.clone(), matrix, shape)
                 }
-                TensorEntry::NdPlanes { plane_uuids, matrix_shape, original_shape, .. } => {
+                TensorEntry::NdPlanes {
+                    plane_uuids,
+                    matrix_shape,
+                    original_shape,
+                    ..
+                } => {
                     // For N-D tensors, analyze first plane and compute total size
                     let first_uuid = plane_uuids.first()?;
                     let path = tensors_dir.join(format!("{}.gmat", first_uuid));
@@ -289,7 +303,10 @@ impl ExportTensorStats {
                 stats.max_importance = analysis.importance;
             }
 
-            *stats.quant_type_counts.entry(analysis.quant_type.clone()).or_insert(0) += 1;
+            *stats
+                .quant_type_counts
+                .entry(analysis.quant_type.clone())
+                .or_insert(0) += 1;
         }
 
         stats.avg_importance = total_importance / analyses.len() as f32;
@@ -299,8 +316,17 @@ impl ExportTensorStats {
     fn print_summary(&self) {
         println!("\n=== Export Tensor Statistics ===");
         println!("Total tensors: {}", self.total_tensors);
-        println!("Total elements: {} ({:.2} B)", self.total_elements, self.total_elements as f64 / 1e9);
-        println!("Elements range: {} - {} ({:.2} M max)", self.min_elements, self.max_elements, self.max_elements as f64 / 1e6);
+        println!(
+            "Total elements: {} ({:.2} B)",
+            self.total_elements,
+            self.total_elements as f64 / 1e9
+        );
+        println!(
+            "Elements range: {} - {} ({:.2} M max)",
+            self.min_elements,
+            self.max_elements,
+            self.max_elements as f64 / 1e6
+        );
 
         println!("\nImportance scores:");
         println!("  Min: {:.4}", self.min_importance);
@@ -363,13 +389,25 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
 /// Generate an export config template from a GMAT model.
 ///
 /// Uses tokio-rayon for parallel tensor analysis.
-pub fn generate_config_template(model_path: &str, importance_high: f32, importance_medium: f32) -> Result<()> {
+pub fn generate_config_template(
+    model_path: &str,
+    importance_high: f32,
+    importance_medium: f32,
+) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(generate_config_template_async(model_path, importance_high, importance_medium))
+    rt.block_on(generate_config_template_async(
+        model_path,
+        importance_high,
+        importance_medium,
+    ))
 }
 
 /// Async implementation of export config generation.
-async fn generate_config_template_async(model_path: &str, importance_high: f32, importance_medium: f32) -> Result<()> {
+async fn generate_config_template_async(
+    model_path: &str,
+    importance_high: f32,
+    importance_medium: f32,
+) -> Result<()> {
     use std::time::Instant;
 
     let start_time = Instant::now();
@@ -380,8 +418,12 @@ async fn generate_config_template_async(model_path: &str, importance_high: f32, 
         .context("tensor_name_map not found in metadata.json")?;
 
     let thresholds = ImportanceThresholds::new(importance_high, importance_medium);
-    println!("Analyzing {} tensors (thresholds: high={}, medium={})...",
-             tensor_map.len(), thresholds.high, thresholds.medium);
+    println!(
+        "Analyzing {} tensors (thresholds: high={}, medium={})...",
+        tensor_map.len(),
+        thresholds.high,
+        thresholds.medium
+    );
 
     let tensors_dir = model_dir.join("tensors");
 
@@ -394,12 +436,11 @@ async fn generate_config_template_async(model_path: &str, importance_high: f32, 
     // Run CPU-bound tensor analysis on rayon pool
     let analysis_start = Instant::now();
     let analyses = tokio_rayon::spawn(move || {
-        let entries_ref: Vec<(&String, &serde_json::Value)> = tensor_entries
-            .iter()
-            .map(|(k, v)| (k, v))
-            .collect();
+        let entries_ref: Vec<(&String, &serde_json::Value)> =
+            tensor_entries.iter().map(|(k, v)| (k, v)).collect();
         analyze_model_tensors(entries_ref, &tensors_dir, &thresholds)
-    }).await;
+    })
+    .await;
     let analysis_elapsed = analysis_start.elapsed();
 
     // Build and write config
@@ -432,16 +473,33 @@ fn quantize_tensor_job(job: QuantizeJob, scale_opt: ScaleOptimization) -> Result
                 quant_data,
             })
         }
-        QuantizeEntry::NdPlanes { original_shape, matrix_shape, plane_paths } => {
+        QuantizeEntry::NdPlanes {
+            original_shape,
+            matrix_shape,
+            plane_paths,
+        } => {
             let (_rows, cols) = *matrix_shape;
             let mut all_quant_data: Vec<u8> = Vec::new();
 
             for (plane_idx, path) in plane_paths.iter().enumerate() {
-                let matrix = GraphMatrix::load(path)
-                    .map_err(|e| anyhow::anyhow!("Failed to load plane {} of {}: {}", plane_idx, job.source, e))?;
+                let matrix = GraphMatrix::load(path).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to load plane {} of {}: {}",
+                        plane_idx,
+                        job.source,
+                        e
+                    )
+                })?;
 
                 let plane_quant = quantize_to_gguf(&matrix, job.quant_type, scale_opt, None)
-                    .map_err(|e| anyhow::anyhow!("Quantize failed for plane {} of {}: {}", plane_idx, job.target, e))?;
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Quantize failed for plane {} of {}: {}",
+                            plane_idx,
+                            job.target,
+                            e
+                        )
+                    })?;
 
                 all_quant_data.extend(plane_quant.data);
             }
@@ -480,7 +538,12 @@ pub fn run(
 ) -> Result<()> {
     // Build tokio runtime and run async pipeline
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(model_path, config_path, output_path, shard_size_override))
+    rt.block_on(run_async(
+        model_path,
+        config_path,
+        output_path,
+        shard_size_override,
+    ))
 }
 
 /// Async implementation of export pipeline.
@@ -659,7 +722,11 @@ mod tests {
         let entry = TensorEntry::from_json(&json).unwrap();
 
         match entry {
-            TensorEntry::NdPlanes { original_shape, matrix_shape, plane_uuids } => {
+            TensorEntry::NdPlanes {
+                original_shape,
+                matrix_shape,
+                plane_uuids,
+            } => {
                 assert_eq!(original_shape, vec![64]);
                 assert_eq!(matrix_shape, (1, 64));
                 assert_eq!(plane_uuids.len(), 1);
@@ -679,7 +746,11 @@ mod tests {
         let entry = TensorEntry::from_json(&json).unwrap();
 
         match entry {
-            TensorEntry::NdPlanes { original_shape, matrix_shape, plane_uuids } => {
+            TensorEntry::NdPlanes {
+                original_shape,
+                matrix_shape,
+                plane_uuids,
+            } => {
                 assert_eq!(original_shape, vec![4, 32, 64]);
                 assert_eq!(matrix_shape, (32, 64));
                 assert_eq!(plane_uuids.len(), 4);
@@ -700,7 +771,11 @@ mod tests {
         let entry = TensorEntry::from_json(&json).unwrap();
 
         match entry {
-            TensorEntry::NdPlanes { original_shape, matrix_shape, plane_uuids } => {
+            TensorEntry::NdPlanes {
+                original_shape,
+                matrix_shape,
+                plane_uuids,
+            } => {
                 assert_eq!(original_shape, vec![2, 4, 32, 64]);
                 assert_eq!(matrix_shape, (32, 64));
                 assert_eq!(plane_uuids.len(), 8);
@@ -737,7 +812,9 @@ mod tests {
         let mut name_to_entry = HashMap::new();
         name_to_entry.insert(
             "model.weight".to_string(),
-            TensorEntry::Simple { uuid: uuid.to_string() },
+            TensorEntry::Simple {
+                uuid: uuid.to_string(),
+            },
         );
 
         let result = find_tensor_entry(&name_to_entry, uuid, dir.path());
@@ -758,7 +835,11 @@ mod tests {
 
         // Create plane files
         for i in 0..4 {
-            std::fs::write(dir.path().join(format!("{}_{}.gmat", base_uuid, i)), b"dummy").unwrap();
+            std::fs::write(
+                dir.path().join(format!("{}_{}.gmat", base_uuid, i)),
+                b"dummy",
+            )
+            .unwrap();
         }
 
         let plane_uuids: Vec<String> = (0..4).map(|i| format!("{}_{}", base_uuid, i)).collect();
@@ -778,7 +859,11 @@ mod tests {
         assert!(result.is_some());
 
         match result.unwrap() {
-            QuantizeEntry::NdPlanes { original_shape, matrix_shape, plane_paths } => {
+            QuantizeEntry::NdPlanes {
+                original_shape,
+                matrix_shape,
+                plane_paths,
+            } => {
                 assert_eq!(original_shape, vec![4, 32, 64]);
                 assert_eq!(matrix_shape, (32, 64));
                 assert_eq!(plane_paths.len(), 4);
@@ -798,7 +883,9 @@ mod tests {
         let mut name_to_entry = HashMap::new();
         name_to_entry.insert(
             "model.weight".to_string(),
-            TensorEntry::Simple { uuid: uuid.to_string() },
+            TensorEntry::Simple {
+                uuid: uuid.to_string(),
+            },
         );
 
         let result = find_tensor_entry(&name_to_entry, uuid, dir.path());

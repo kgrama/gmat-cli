@@ -1,7 +1,7 @@
 //! Integration tests for GGUF quantization
 
-use super::*;
 use super::utils::select_quant_with_fallback;
+use super::*;
 
 #[test]
 fn test_dimension_fallback() {

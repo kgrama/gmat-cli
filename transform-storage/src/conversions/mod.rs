@@ -6,23 +6,22 @@
 //! - Log-sparse representations
 //! - GGUF quantization formats (Q4_K, Q8_0, etc.) for llama.cpp
 
-mod sparse;
+mod export_helpers;
 mod log_sparse;
 mod safetensors_import;
-mod export_helpers;
+mod sparse;
 
-mod quant;
 pub mod gguf_quant;
+mod quant;
 
 // Sparse formats
-pub use sparse::{CsrMatrix, CooMatrix};
-pub use log_sparse::{LogSparseMatrix, LogSparseCsrMatrix};
+pub use log_sparse::{LogSparseCsrMatrix, LogSparseMatrix};
+pub use sparse::{CooMatrix, CsrMatrix};
 
 // Unified quantization API
 pub use quant::{
-    QuantDType, QuantParams, QuantizedTensors, PackFormat,
-    ActivationStats, StaticSaliency,
-    quantize, quantize_with_center, quantize_with_activations, quantize_with_saliency,
+    quantize, quantize_with_activations, quantize_with_center, quantize_with_saliency,
+    ActivationStats, PackFormat, QuantDType, QuantParams, QuantizedTensors, StaticSaliency,
 };
 
 // SafeTensor import

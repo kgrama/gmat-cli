@@ -85,7 +85,8 @@ impl StaticSaliency {
     /// Create from per-column maximum scales (single layer).
     pub fn from_column_scales(column_max_scales: &[f32]) -> Self {
         Self {
-            log2_importance: column_max_scales.iter()
+            log2_importance: column_max_scales
+                .iter()
                 .map(|&s| s.abs().max(f32::MIN_POSITIVE).log2())
                 .collect(),
         }
@@ -94,10 +95,14 @@ impl StaticSaliency {
     /// Combine upstream layer log2 scales with current layer scales.
     /// log2_saliency = log2_upstream + log2_current (multiplication in linear domain)
     pub fn from_chained_log2(upstream_log2: &[f32], current_log2: &[f32]) -> Self {
-        assert_eq!(upstream_log2.len(), current_log2.len(), 
-            "upstream and current must have same dimension");
+        assert_eq!(
+            upstream_log2.len(),
+            current_log2.len(),
+            "upstream and current must have same dimension"
+        );
         Self {
-            log2_importance: upstream_log2.iter()
+            log2_importance: upstream_log2
+                .iter()
                 .zip(current_log2.iter())
                 .map(|(&u, &c)| u + c)
                 .collect(),
@@ -107,7 +112,9 @@ impl StaticSaliency {
     /// Convert to ActivationStats for drop-in compatibility with AWQ/GGUF pipelines.
     /// Uses minimal fields required for importance weighting.
     pub fn to_activation_stats(&self) -> ActivationStats {
-        let row_importance: Vec<f32> = self.log2_importance.iter()
+        let row_importance: Vec<f32> = self
+            .log2_importance
+            .iter()
             .map(|&log2_s| super::utils::fast_exp2(log2_s))
             .collect();
         ActivationStats {
@@ -167,31 +174,31 @@ impl GgufQuantType {
     pub fn block_bytes(&self) -> usize {
         use GgufQuantType::*;
         match self {
-            Q4_0 => 2 + 16,                  // f16 scale + 16 nibbles
-            Q4_1 => 2 + 2 + 16,              // f16 scale + f16 min + 16 nibbles
-            Q5_0 => 2 + 4 + 16,              // f16 scale + 4B high + 16B low
-            Q5_1 => 2 + 2 + 4 + 16,          // f16 scale + f16 min + 4B high + 16B low
-            Q8_0 => 2 + 32,                  // f16 scale + 32 int8
-            Q4_K_S | Q4_K_M => 2 + 2 + 12 + 128, // d + dmin + scales + quants
+            Q4_0 => 2 + 16,                           // f16 scale + 16 nibbles
+            Q4_1 => 2 + 2 + 16,                       // f16 scale + f16 min + 16 nibbles
+            Q5_0 => 2 + 4 + 16,                       // f16 scale + 4B high + 16B low
+            Q5_1 => 2 + 2 + 4 + 16,                   // f16 scale + f16 min + 4B high + 16B low
+            Q8_0 => 2 + 32,                           // f16 scale + 32 int8
+            Q4_K_S | Q4_K_M => 2 + 2 + 12 + 128,      // d + dmin + scales + quants
             Q5_K_S | Q5_K_M => 2 + 2 + 12 + 128 + 32, // + high bits
-            Q6_K => 128 + 64 + 16 + 2,       // ql + qh + scales + d = 210
+            Q6_K => 128 + 64 + 16 + 2,                // ql + qh + scales + d = 210
 
             // Q2_K and Q3_K formats
-            Q2_K => 2 + 2 + 16 + 64,         // d + dmin + scales + quants = 84
-            Q3_K_S => 2 + 32 + 64,           // d + hmask + quants = 98 (no scales packed separately)
-            Q3_K_M => 2 + 32 + 64 + 12,      // d + hmask + quants + scales = 110
-            Q3_K_L => 2 + 32 + 64 + 12,      // same as Q3_K_M = 110
+            Q2_K => 2 + 2 + 16 + 64,    // d + dmin + scales + quants = 84
+            Q3_K_S => 2 + 32 + 64,      // d + hmask + quants = 98 (no scales packed separately)
+            Q3_K_M => 2 + 32 + 64 + 12, // d + hmask + quants + scales = 110
+            Q3_K_L => 2 + 32 + 64 + 12, // same as Q3_K_M = 110
 
             // I-Quants (256-element super-blocks)
-            IQ1_S => 2 + 2 + 32,             // d + sumd + grids = 36
-            IQ1_M => 2 + 2 + 2 + 32 + 8,     // d + sumd + extra + grids + scales = 46
-            IQ2_XXS => 2 + 2 + 32,           // d + extra + grids = 36
-            IQ2_XS => 2 + 2 + 64 + 2,        // d + extra + grids + scales_h = 70
-            IQ2_S => 2 + 64 + 2 + 1,         // d + grids + scales_h + extra = 69
-            IQ3_XXS => 2 + 3 * 32 + 32,      // d + grids + signs = 130 (approx, varies)
-            IQ3_S => 2 + 64 + 32 + 4 + 2,    // d + grids + signs + scales + extra = 104
-            IQ4_XS => 2 + 2 + 4 + 128,       // d + scales_h + scales_l + quants = 136
-            IQ4_NL => 2 + 128,               // d + quants = 130 (uses lookup table)
+            IQ1_S => 2 + 2 + 32,          // d + sumd + grids = 36
+            IQ1_M => 2 + 2 + 2 + 32 + 8,  // d + sumd + extra + grids + scales = 46
+            IQ2_XXS => 2 + 2 + 32,        // d + extra + grids = 36
+            IQ2_XS => 2 + 2 + 64 + 2,     // d + extra + grids + scales_h = 70
+            IQ2_S => 2 + 64 + 2 + 1,      // d + grids + scales_h + extra = 69
+            IQ3_XXS => 2 + 3 * 32 + 32,   // d + grids + signs = 130 (approx, varies)
+            IQ3_S => 2 + 64 + 32 + 4 + 2, // d + grids + signs + scales + extra = 104
+            IQ4_XS => 2 + 2 + 4 + 128,    // d + scales_h + scales_l + quants = 136
+            IQ4_NL => 2 + 128,            // d + quants = 130 (uses lookup table)
         }
     }
 

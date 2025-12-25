@@ -66,22 +66,38 @@ pub(crate) fn encode_dual_row_blocks(
             let row0 = row_pair * 2;
             let row1 = row0 + 1;
 
-            (0..blocks_per_row).map(move |block_idx| {
-                let block_col_start = block_idx * block_size;
-                let block_len = (block_col_start + block_size).min(cols) - block_col_start;
+            (0..blocks_per_row)
+                .map(move |block_idx| {
+                    let block_col_start = block_idx * block_size;
+                    let block_len = (block_col_start + block_size).min(cols) - block_col_start;
 
-                let mut buf0 = [0.0f32; 16];
-                let mut buf1 = [0.0f32; 16];
+                    let mut buf0 = [0.0f32; 16];
+                    let mut buf1 = [0.0f32; 16];
 
-                copy_row_segment(data, row0, cols, block_col_start, block_len, &mut buf0[..block_size]);
-                if row1 < rows {
-                    copy_row_segment(data, row1, cols, block_col_start, block_len, &mut buf1[..block_size]);
-                } else {
-                    buf1[..block_size].fill(0.0);
-                }
+                    copy_row_segment(
+                        data,
+                        row0,
+                        cols,
+                        block_col_start,
+                        block_len,
+                        &mut buf0[..block_size],
+                    );
+                    if row1 < rows {
+                        copy_row_segment(
+                            data,
+                            row1,
+                            cols,
+                            block_col_start,
+                            block_len,
+                            &mut buf1[..block_size],
+                        );
+                    } else {
+                        buf1[..block_size].fill(0.0);
+                    }
 
-                encode_dual_row_block(format, &buf0[..block_size], &buf1[..block_size])
-            }).collect::<Vec<_>>()
+                    encode_dual_row_block(format, &buf0[..block_size], &buf1[..block_size])
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -100,14 +116,23 @@ pub(crate) fn encode_single_row_blocks(
     (0..rows)
         .into_par_iter()
         .flat_map(|row| {
-            (0..blocks_per_row).map(move |block_idx| {
-                let block_col_start = block_idx * block_size;
-                let block_len = (block_col_start + block_size).min(cols) - block_col_start;
+            (0..blocks_per_row)
+                .map(move |block_idx| {
+                    let block_col_start = block_idx * block_size;
+                    let block_len = (block_col_start + block_size).min(cols) - block_col_start;
 
-                let mut buf = [0.0f32; 16];
-                copy_row_segment(data, row, cols, block_col_start, block_len, &mut buf[..block_size]);
-                encode_single_row_block(format, &buf[..block_size])
-            }).collect::<Vec<_>>()
+                    let mut buf = [0.0f32; 16];
+                    copy_row_segment(
+                        data,
+                        row,
+                        cols,
+                        block_col_start,
+                        block_len,
+                        &mut buf[..block_size],
+                    );
+                    encode_single_row_block(format, &buf[..block_size])
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
 }

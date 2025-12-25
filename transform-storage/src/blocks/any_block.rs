@@ -1,9 +1,9 @@
 //! Type-erased block enum that can hold any block configuration
 
-use half::f16;
-use std::io::{Read, Write, Result};
-use super::configs::{BlockConfig, Config8x4, Config8x8, Config16x4, Config16x8};
+use super::configs::{BlockConfig, Config16x4, Config16x8, Config8x4, Config8x8};
 use super::unified_block::{EncodeHelper, UnifiedBlock};
+use half::f16;
+use std::io::{Read, Result, Write};
 
 /// Internal trait for unified block operations across all configurations.
 /// This enables generic functions to work with any UnifiedBlock variant.
@@ -19,11 +19,21 @@ pub(crate) trait UnifiedBlockOps {
 }
 
 impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlockOps for UnifiedBlock<ROWS, C> {
-    fn scale_log(&self) -> f16 { self.scale_log }
-    fn decode_element(&self, row: usize, idx: usize) -> f32 { UnifiedBlock::decode_element(self, row, idx) }
-    fn row_nnz(&self, row: usize) -> usize { UnifiedBlock::row_nnz(self, row) }
-    fn is_empty(&self) -> bool { UnifiedBlock::is_empty(self) }
-    fn byte_size(&self) -> usize { UnifiedBlock::byte_size(self) }
+    fn scale_log(&self) -> f16 {
+        self.scale_log
+    }
+    fn decode_element(&self, row: usize, idx: usize) -> f32 {
+        UnifiedBlock::decode_element(self, row, idx)
+    }
+    fn row_nnz(&self, row: usize) -> usize {
+        UnifiedBlock::row_nnz(self, row)
+    }
+    fn is_empty(&self) -> bool {
+        UnifiedBlock::is_empty(self)
+    }
+    fn byte_size(&self) -> usize {
+        UnifiedBlock::byte_size(self)
+    }
     fn has_element_at(&self, row: usize, idx: usize) -> bool {
         let mask: u64 = self.zero_map[row].into();
         (mask >> idx) & 1 == 1
@@ -71,7 +81,10 @@ impl BlockFormat {
 
     /// Check if this format is dual-row
     pub fn is_dual_row(&self) -> bool {
-        matches!(self, Self::DualRow8x4 | Self::DualRow8x8 | Self::DualRow16x4 | Self::DualRow16x8)
+        matches!(
+            self,
+            Self::DualRow8x4 | Self::DualRow8x8 | Self::DualRow16x4 | Self::DualRow16x8
+        )
     }
 }
 
@@ -217,7 +230,12 @@ impl AnyBlock {
     /// For dual-row blocks, row can be 0 or 1
     pub fn decode_row(&self, row: usize, idx: usize) -> f32 {
         let max_row = if self.format().is_dual_row() { 2 } else { 1 };
-        assert!(row < max_row, "Row {} out of bounds for block with {} rows", row, max_row);
+        assert!(
+            row < max_row,
+            "Row {} out of bounds for block with {} rows",
+            row,
+            max_row
+        );
         self.inner().decode_element(row, idx)
     }
 
@@ -234,7 +252,9 @@ impl AnyBlock {
     /// Check if element exists
     /// Note: For DualRow variants, checks row 0 only.
     pub fn has_element(&self, idx: usize) -> bool {
-        if idx >= self.size() { return false; }
+        if idx >= self.size() {
+            return false;
+        }
         self.inner().has_element_at(0, idx)
     }
 
@@ -286,10 +306,18 @@ impl AnyBlock {
             BlockFormat::B8x8 => Ok(Self::B8x8(UnifiedBlock::<1, Config8x8>::read_from(r)?)),
             BlockFormat::B16x4 => Ok(Self::B16x4(UnifiedBlock::<1, Config16x4>::read_from(r)?)),
             BlockFormat::B16x8 => Ok(Self::B16x8(UnifiedBlock::<1, Config16x8>::read_from(r)?)),
-            BlockFormat::DualRow8x4 => Ok(Self::DualRow8x4(UnifiedBlock::<2, Config8x4>::read_from(r)?)),
-            BlockFormat::DualRow8x8 => Ok(Self::DualRow8x8(UnifiedBlock::<2, Config8x8>::read_from(r)?)),
-            BlockFormat::DualRow16x4 => Ok(Self::DualRow16x4(UnifiedBlock::<2, Config16x4>::read_from(r)?)),
-            BlockFormat::DualRow16x8 => Ok(Self::DualRow16x8(UnifiedBlock::<2, Config16x8>::read_from(r)?)),
+            BlockFormat::DualRow8x4 => Ok(Self::DualRow8x4(
+                UnifiedBlock::<2, Config8x4>::read_from(r)?,
+            )),
+            BlockFormat::DualRow8x8 => Ok(Self::DualRow8x8(
+                UnifiedBlock::<2, Config8x8>::read_from(r)?,
+            )),
+            BlockFormat::DualRow16x4 => Ok(Self::DualRow16x4(
+                UnifiedBlock::<2, Config16x4>::read_from(r)?,
+            )),
+            BlockFormat::DualRow16x8 => Ok(Self::DualRow16x8(
+                UnifiedBlock::<2, Config16x8>::read_from(r)?,
+            )),
         }
     }
 
@@ -304,7 +332,12 @@ impl AnyBlock {
     /// For dual-row blocks, row can be 0 or 1
     pub fn row_iter(&self, row: usize) -> Box<dyn Iterator<Item = (usize, f32)> + '_> {
         let max_row = if self.format().is_dual_row() { 2 } else { 1 };
-        assert!(row < max_row, "Row {} out of bounds for block with {} rows", row, max_row);
+        assert!(
+            row < max_row,
+            "Row {} out of bounds for block with {} rows",
+            row,
+            max_row
+        );
         match self {
             Self::B8x4(b) => Box::new(b.row_iter(row)),
             Self::B8x8(b) => Box::new(b.row_iter(row)),
@@ -322,7 +355,12 @@ impl AnyBlock {
     /// For dual-row blocks, row can be 0 or 1
     pub fn log_row_iter(&self, row: usize) -> Box<dyn Iterator<Item = (usize, f32, u8)> + '_> {
         let max_row = if self.format().is_dual_row() { 2 } else { 1 };
-        assert!(row < max_row, "Row {} out of bounds for block with {} rows", row, max_row);
+        assert!(
+            row < max_row,
+            "Row {} out of bounds for block with {} rows",
+            row,
+            max_row
+        );
         match self {
             Self::B8x4(b) => Box::new(b.log_row_iter(row)),
             Self::B8x8(b) => Box::new(b.log_row_iter(row)),
@@ -343,7 +381,7 @@ impl AnyBlock {
 
     /// Get raw e1m7 magnitude data for LUT-based quantization.
     /// Returns (magnitudes, shift_map, signs, scale_log) for direct LUT indexing.
-    /// 
+    ///
     /// For each non-zero element at index i:
     /// - lut_index = magnitudes[i] + (256 if shift_map bit i is set)
     /// - sign_bit = (signs >> i) & 1
@@ -357,23 +395,43 @@ impl AnyBlock {
             Self::B8x8(b) => {
                 let shift_map: u64 = b.octave_shift[0].into();
                 let signs: u64 = b.signs[0].into();
-                Some((&b.magnitudes[0][..8], shift_map as u16, signs as u16, b.scale_log.to_f32()))
-            },
+                Some((
+                    &b.magnitudes[0][..8],
+                    shift_map as u16,
+                    signs as u16,
+                    b.scale_log.to_f32(),
+                ))
+            }
             Self::B16x8(b) => {
                 let shift_map: u64 = b.octave_shift[0].into();
                 let signs: u64 = b.signs[0].into();
-                Some((&b.magnitudes[0][..16], shift_map as u16, signs as u16, b.scale_log.to_f32()))
-            },
+                Some((
+                    &b.magnitudes[0][..16],
+                    shift_map as u16,
+                    signs as u16,
+                    b.scale_log.to_f32(),
+                ))
+            }
             Self::DualRow8x8(b) => {
                 let shift_map: u64 = b.octave_shift[0].into();
                 let signs: u64 = b.signs[0].into();
-                Some((&b.magnitudes[0][..8], shift_map as u16, signs as u16, b.scale_log.to_f32()))
-            },
+                Some((
+                    &b.magnitudes[0][..8],
+                    shift_map as u16,
+                    signs as u16,
+                    b.scale_log.to_f32(),
+                ))
+            }
             Self::DualRow16x8(b) => {
                 let shift_map: u64 = b.octave_shift[0].into();
                 let signs: u64 = b.signs[0].into();
-                Some((&b.magnitudes[0][..16], shift_map as u16, signs as u16, b.scale_log.to_f32()))
-            },
+                Some((
+                    &b.magnitudes[0][..16],
+                    shift_map as u16,
+                    signs as u16,
+                    b.scale_log.to_f32(),
+                ))
+            }
             // 4-bit variants - not supported
             _ => None,
         }

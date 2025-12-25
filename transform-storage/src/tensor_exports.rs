@@ -1,7 +1,7 @@
 //! Tensor and sparse format export methods for GraphMatrix.
 
-use candle_core::{Device, Tensor, Result};
 use crate::graph_matrix::GraphMatrix;
+use candle_core::{Device, Result, Tensor};
 
 impl GraphMatrix {
     /// Convert GraphMatrix to a candle Tensor.
@@ -77,10 +77,10 @@ impl GraphMatrix {
         F: FnMut(usize, usize, f32, u8),
     {
         use crate::blocks::BlockTraversal;
-        
+
         let (rows, _) = self.shape();
         let config = self.traversal_config();
-        
+
         for row in 0..rows {
             let traversal = BlockTraversal::row(self.row_blocks(), config, row);
             for (col, log_mag, sign) in traversal.log_iter() {
@@ -103,7 +103,13 @@ impl GraphMatrix {
             signs.push(sign);
         });
 
-        crate::conversions::LogSparseMatrix::new(log2_values, signs, row_indices, col_indices, self.shape())
+        crate::conversions::LogSparseMatrix::new(
+            log2_values,
+            signs,
+            row_indices,
+            col_indices,
+            self.shape(),
+        )
     }
 
     /// Export to log-sparse CSR format.
@@ -131,6 +137,12 @@ impl GraphMatrix {
             row_ptr[i] = log2_values.len();
         }
 
-        crate::conversions::LogSparseCsrMatrix::new(log2_values, signs, col_indices, row_ptr, self.shape())
+        crate::conversions::LogSparseCsrMatrix::new(
+            log2_values,
+            signs,
+            col_indices,
+            row_ptr,
+            self.shape(),
+        )
     }
 }

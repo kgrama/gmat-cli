@@ -1,12 +1,12 @@
 //! GraphMatrix - Block-based sparse matrix storage.
 
-use crate::blocks::{AnyBlock, BlockFormat, BlockTraversal, TraversalConfig, transpose_tile};
-use candle_core::{Tensor, Result};
+use crate::blocks::{transpose_tile, AnyBlock, BlockFormat, BlockTraversal, TraversalConfig};
 use crate::formats::GmatMetadata;
+use candle_core::{Result, Tensor};
 
+mod encoding;
 mod layout;
 mod stats;
-mod encoding;
 
 /// Block-based sparse matrix with optional column index.
 ///
@@ -51,7 +51,11 @@ impl GraphMatrix {
     /// For dual-row formats, get which sub-row (0 or 1) within the block.
     #[inline]
     fn row_in_block(&self, row: usize) -> usize {
-        if self.format.is_dual_row() { row % 2 } else { 0 }
+        if self.format.is_dual_row() {
+            row % 2
+        } else {
+            0
+        }
     }
 
     /// Get traversal configuration for this matrix.
@@ -74,7 +78,9 @@ impl GraphMatrix {
     /// Requires column index to be built.
     #[inline]
     fn col_traversal(&self, col: usize) -> BlockTraversal<'_> {
-        let col_blocks = self.col_blocks.as_ref()
+        let col_blocks = self
+            .col_blocks
+            .as_ref()
             .expect("Column index not built. Call build_col_index() first.");
         // For column traversal, we need a transposed config
         let col_config = TraversalConfig::new(
@@ -98,7 +104,11 @@ impl GraphMatrix {
     ///
     /// # Panics
     /// Panics if block count doesn't match expected
-    pub fn from_blocks(row_blocks: Vec<AnyBlock>, shape: (usize, usize), format: BlockFormat) -> Self {
+    pub fn from_blocks(
+        row_blocks: Vec<AnyBlock>,
+        shape: (usize, usize),
+        format: BlockFormat,
+    ) -> Self {
         let (rows, cols) = shape;
         let expected_blocks = layout::expected_block_count(rows, cols, &format);
 
@@ -106,7 +116,11 @@ impl GraphMatrix {
             row_blocks.len(),
             expected_blocks,
             "Block count mismatch: expected {} blocks for {}x{} matrix with format {:?}, got {}",
-            expected_blocks, rows, cols, format, row_blocks.len()
+            expected_blocks,
+            rows,
+            cols,
+            format,
+            row_blocks.len()
         );
 
         Self {
@@ -137,7 +151,10 @@ impl GraphMatrix {
             data.len(),
             rows * cols,
             "Data length {} doesn't match shape {}x{} = {}",
-            data.len(), rows, cols, rows * cols
+            data.len(),
+            rows,
+            cols,
+            rows * cols
         );
 
         let block_size = format.block_size();
@@ -166,7 +183,7 @@ impl GraphMatrix {
 
     /// Get block format.
     #[inline]
-    #[allow(dead_code)]  // Used by config/ modules
+    #[allow(dead_code)] // Used by config/ modules
     pub(crate) fn format(&self) -> BlockFormat {
         self.format
     }
@@ -207,17 +224,17 @@ impl GraphMatrix {
     /// - Vec overhead for col_blocks if present
     pub fn memory_bytes(&self) -> usize {
         let blocks_size: usize = self.row_blocks.iter().map(|b| b.byte_size()).sum();
-        
+
         // Vec overhead: 3 * size_of::<usize>() for ptr/len/cap
         let vec_overhead = std::mem::size_of::<Vec<AnyBlock>>();
-        
+
         let col_blocks_size = if let Some(ref col_blocks) = self.col_blocks {
             let col_blocks_data: usize = col_blocks.iter().map(|b| b.byte_size()).sum();
             col_blocks_data + vec_overhead
         } else {
             0
         };
-        
+
         blocks_size + vec_overhead + col_blocks_size
     }
 
@@ -238,10 +255,10 @@ impl GraphMatrix {
         if dims.len() != 2 {
             candle_core::bail!("Expected 2D tensor, got {}D", dims.len());
         }
-        
+
         let shape = (dims[0], dims[1]);
         let data = tensor.flatten_all()?.to_vec1::<f32>()?;
-        
+
         Ok(Self::from_dense(&data, shape, format))
     }
 
@@ -304,7 +321,12 @@ impl GraphMatrix {
     /// # Panics
     /// Panics if row >= self.shape.0
     pub fn row_iter(&self, row: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
-        assert!(row < self.shape.0, "Row index {} out of bounds for matrix with {} rows", row, self.shape.0);
+        assert!(
+            row < self.shape.0,
+            "Row index {} out of bounds for matrix with {} rows",
+            row,
+            self.shape.0
+        );
         self.row_traversal(row).value_iter()
     }
 
@@ -327,7 +349,12 @@ impl GraphMatrix {
     /// - Panics if col >= self.shape.1
     /// - Panics if column index has not been built (call build_col_index first)
     pub fn col_iter(&self, col: usize) -> impl Iterator<Item = (usize, f32)> + '_ {
-        assert!(col < self.shape.1, "Column index {} out of bounds for matrix with {} columns", col, self.shape.1);
+        assert!(
+            col < self.shape.1,
+            "Column index {} out of bounds for matrix with {} columns",
+            col,
+            self.shape.1
+        );
         self.col_traversal(col).value_iter()
     }
 
@@ -382,7 +409,12 @@ impl GraphMatrix {
                 }
 
                 // Transpose tile: block_size row blocks → block_size column blocks
-                transpose_tile(&tile_block_refs, &row_in_block_buf, &mut transposed_buf, &mut scratch);
+                transpose_tile(
+                    &tile_block_refs,
+                    &row_in_block_buf,
+                    &mut transposed_buf,
+                    &mut scratch,
+                );
 
                 // Store transposed blocks in column-major order
                 let col_start = col_tile * block_size;

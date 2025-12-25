@@ -3,8 +3,8 @@
 use half::f16;
 use rayon::prelude::*;
 
-use crate::blocks::AnyBlock;
 use super::types::GgufQuantType;
+use crate::blocks::AnyBlock;
 
 //=============================================================================
 // Fast Math Utilities
@@ -61,12 +61,12 @@ impl Default for LogGroupStats {
 #[inline]
 pub fn log2_group_stats(gmat_blocks: &[&AnyBlock]) -> LogGroupStats {
     let mut stats = LogGroupStats::default();
-    
+
     for blk in gmat_blocks {
         for (_, log2_mag, sign) in blk.log_iter() {
             stats.log2_sum += log2_mag as f64;
             stats.count += 1;
-            
+
             if sign == 1 {
                 // Negative value
                 stats.neg_count += 1;
@@ -77,7 +77,7 @@ pub fn log2_group_stats(gmat_blocks: &[&AnyBlock]) -> LogGroupStats {
             }
         }
     }
-    
+
     stats
 }
 
@@ -103,13 +103,13 @@ pub fn compute_scale_from_log2_max(log2_max: f32, q_max: u8) -> f16 {
 #[inline]
 pub fn compute_superblock_scales(gmat_blocks: &[&AnyBlock]) -> (f16, f16) {
     let stats = log2_group_stats(gmat_blocks);
-    
+
     // Compute d from maximum positive value: d = exp2(log2_max) / 63
     let d = compute_scale_from_log2_max(stats.log2_max, 63);
-    
+
     // Compute dmin from maximum negative value: dmin = exp2(neg_log2_max) / 63
     let dmin = compute_scale_from_log2_max(stats.neg_log2_max, 63);
-    
+
     (d, dmin)
 }
 
@@ -172,7 +172,12 @@ pub fn pack_nibble(out: &mut [u8], offset: usize, elem_idx: usize, q: u8) {
 #[inline(always)]
 pub fn set_high_bit_5(out: &mut [u8], high_offset: usize, elem_idx: usize, q: u8) {
     let high_bit = (q >> 4) & 1;
-    out[high_offset + (elem_idx >> 3)] |= high_bit << if elem_idx.is_multiple_of(8) { 0 } else { elem_idx & 7 };
+    out[high_offset + (elem_idx >> 3)] |= high_bit
+        << if elem_idx.is_multiple_of(8) {
+            0
+        } else {
+            elem_idx & 7
+        };
 }
 
 /// Set high 2 bits for 6-bit formats (bits 4-5 stored separately).
@@ -180,7 +185,11 @@ pub fn set_high_bit_5(out: &mut [u8], high_offset: usize, elem_idx: usize, q: u8
 pub fn set_high_bits_6(out: &mut [u8], high_offset: usize, elem_idx: usize, q: u8) {
     let high_bits = (q >> 4) & 0x03;
     let byte_idx = high_offset + (elem_idx >> 2);
-    let bit_offset = if elem_idx.is_multiple_of(4) { 0 } else { (elem_idx & 3) << 1 };
+    let bit_offset = if elem_idx.is_multiple_of(4) {
+        0
+    } else {
+        (elem_idx & 3) << 1
+    };
     out[byte_idx] |= high_bits << bit_offset;
 }
 

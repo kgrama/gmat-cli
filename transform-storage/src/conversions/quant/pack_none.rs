@@ -1,7 +1,7 @@
 //! Unpacked quantization (one value per element).
 
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{Device, Tensor, Result};
+use candle_core::{Device, Result, Tensor};
 use half::f16;
 
 use super::float_quant::quantize_float_bits;

@@ -10,8 +10,8 @@
 
 use half::f16;
 
-use crate::blocks::AnyBlock;
 use super::utils::gmat_blocks_per_group;
+use crate::blocks::AnyBlock;
 
 /// Trellis-optimized group scale selection for K-quants.
 ///
@@ -68,17 +68,17 @@ pub fn optimize_group_scales_trellis(
                     // This avoids N×exp2 calls in the DP inner loop
                     let log2_d = f32::from(d).log2();
                     let log2_scale_factor = (scale_idx as f32).log2();
-                    
+
                     // Estimate quantized index in log-domain
                     // For ideal quantization: value = scale * q - min
                     // In log-domain: log2_mag ≈ log2_d + log2_scale_factor + log2_q (ignoring min offset)
                     // So: log2_q ≈ log2_mag - log2_d - log2_scale_factor
                     let log2_q_ideal = log2_mag - log2_d - log2_scale_factor;
-                    
+
                     // Clamp to valid quantization range [0, 15] in log-domain
                     // log2(1) = 0, log2(15) ≈ 3.9
                     let log2_q = log2_q_ideal.clamp(0.0, 3.91);
-                    
+
                     // Pure log-domain error metric
                     let err = (log2_q_ideal - log2_q).abs();
 

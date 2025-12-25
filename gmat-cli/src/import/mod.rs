@@ -17,7 +17,7 @@ use crate::common::{discover_safetensor_files, load_config};
 use crate::config::import_config::{ImportConfig, TensorMapping};
 
 use metadata::extract_model_metadata;
-use streaming::{run_streaming_import, SavedTensor};
+use streaming::{SavedTensor, run_streaming_import};
 
 /// Generate an import config template from a model file.
 ///
@@ -46,7 +46,8 @@ async fn generate_config_template_async(model_path: &str) -> Result<()> {
     // Run CPU-bound tensor mapping and stats collection on rayon pool
     let files_for_mappings = safetensor_files.clone();
     let mapping_start = Instant::now();
-    let (tensor_mappings, stats) = tokio_rayon::spawn(move || collect_tensor_mappings_with_stats(&files_for_mappings)).await?;
+    let (tensor_mappings, stats) =
+        tokio_rayon::spawn(move || collect_tensor_mappings_with_stats(&files_for_mappings)).await?;
     let mapping_elapsed = mapping_start.elapsed();
 
     let config = ImportConfig {
@@ -71,12 +72,18 @@ async fn generate_config_template_async(model_path: &str) -> Result<()> {
     }
 
     println!("\n=== Timing ===");
-    println!("Metadata extraction: {:.2}s", metadata_elapsed.as_secs_f64());
+    println!(
+        "Metadata extraction: {:.2}s",
+        metadata_elapsed.as_secs_f64()
+    );
     println!("Tensor mapping: {:.2}s", mapping_elapsed.as_secs_f64());
     println!("Total: {:.2}s", total_elapsed.as_secs_f64());
 
     println!("\nEdit the config, then run:");
-    println!("  gmat import --model {} --config import_config.json", model_path);
+    println!(
+        "  gmat import --model {} --config import_config.json",
+        model_path
+    );
 
     Ok(())
 }
@@ -108,7 +115,14 @@ pub fn run(model_path: &str, config_path: Option<&str>, output_path: Option<&str
     let total = tensor_map.len();
     println!("Processing {} tensors...", total);
 
-    let saved = run_streaming_import(&safetensor_files, &tensor_map, &tensors_dir, &config, block_format, total)?;
+    let saved = run_streaming_import(
+        &safetensor_files,
+        &tensor_map,
+        &tensors_dir,
+        &config,
+        block_format,
+        total,
+    )?;
 
     write_import_metadata(&output_dir, &config, &saved)?;
     println!("\n=== Import Complete: {} tensors ===", saved.len());
@@ -152,17 +166,31 @@ impl TensorStats {
             if self.shape_distribution.min_elements == 0 {
                 self.shape_distribution.min_elements = other.shape_distribution.min_elements;
             } else {
-                self.shape_distribution.min_elements = self.shape_distribution.min_elements.min(other.shape_distribution.min_elements);
+                self.shape_distribution.min_elements = self
+                    .shape_distribution
+                    .min_elements
+                    .min(other.shape_distribution.min_elements);
             }
         }
-        self.shape_distribution.max_elements = self.shape_distribution.max_elements.max(other.shape_distribution.max_elements);
+        self.shape_distribution.max_elements = self
+            .shape_distribution
+            .max_elements
+            .max(other.shape_distribution.max_elements);
     }
 
     fn print_summary(&self) {
         println!("\n=== Tensor Statistics ===");
         println!("Total tensors: {}", self.total_tensors);
-        println!("Total elements: {} ({:.2} B)", self.total_elements, self.total_elements as f64 / 1e9);
-        println!("Total size: {} ({:.2} GB)", format_bytes(self.total_bytes), self.total_bytes as f64 / 1e9);
+        println!(
+            "Total elements: {} ({:.2} B)",
+            self.total_elements,
+            self.total_elements as f64 / 1e9
+        );
+        println!(
+            "Total size: {} ({:.2} GB)",
+            format_bytes(self.total_bytes),
+            self.total_bytes as f64 / 1e9
+        );
 
         println!("\nShape distribution:");
         println!("  1D tensors: {}", self.shape_distribution.dim_1d);
@@ -170,7 +198,11 @@ impl TensorStats {
         println!("  3D tensors: {}", self.shape_distribution.dim_3d);
         println!("  4D+ tensors: {}", self.shape_distribution.dim_4d_plus);
         println!("  Min elements: {}", self.shape_distribution.min_elements);
-        println!("  Max elements: {} ({:.2} M)", self.shape_distribution.max_elements, self.shape_distribution.max_elements as f64 / 1e6);
+        println!(
+            "  Max elements: {} ({:.2} M)",
+            self.shape_distribution.max_elements,
+            self.shape_distribution.max_elements as f64 / 1e6
+        );
 
         println!("\nData types:");
         let mut dtypes: Vec<_> = self.dtype_counts.iter().collect();
@@ -202,7 +234,10 @@ fn format_bytes(bytes: u64) -> String {
 fn dtype_byte_size(dtype: safetensors::Dtype) -> u64 {
     match dtype {
         safetensors::Dtype::BOOL | safetensors::Dtype::U8 | safetensors::Dtype::I8 => 1,
-        safetensors::Dtype::F16 | safetensors::Dtype::BF16 | safetensors::Dtype::I16 | safetensors::Dtype::U16 => 2,
+        safetensors::Dtype::F16
+        | safetensors::Dtype::BF16
+        | safetensors::Dtype::I16
+        | safetensors::Dtype::U16 => 2,
         safetensors::Dtype::F32 | safetensors::Dtype::I32 | safetensors::Dtype::U32 => 4,
         safetensors::Dtype::F64 | safetensors::Dtype::I64 | safetensors::Dtype::U64 => 8,
         _ => 4, // default assumption
@@ -213,7 +248,9 @@ fn dtype_byte_size(dtype: safetensors::Dtype) -> u64 {
 ///
 /// This only reads the safetensor header metadata, not the full tensor data,
 /// making it much faster for large model files.
-fn collect_tensor_mappings_with_stats(safetensor_files: &[std::path::PathBuf]) -> Result<(Vec<TensorMapping>, TensorStats)> {
+fn collect_tensor_mappings_with_stats(
+    safetensor_files: &[std::path::PathBuf],
+) -> Result<(Vec<TensorMapping>, TensorStats)> {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     let total_files = safetensor_files.len();
@@ -247,7 +284,10 @@ fn collect_tensor_mappings_with_stats(safetensor_files: &[std::path::PathBuf]) -
                     stats.total_tensors += 1;
                     stats.total_elements += numel;
                     stats.total_bytes += bytes;
-                    *stats.dtype_counts.entry(format!("{:?}", dtype)).or_insert(0) += 1;
+                    *stats
+                        .dtype_counts
+                        .entry(format!("{:?}", dtype))
+                        .or_insert(0) += 1;
 
                     // Shape distribution
                     match shape.len() {
@@ -256,7 +296,9 @@ fn collect_tensor_mappings_with_stats(safetensor_files: &[std::path::PathBuf]) -
                         3 => stats.shape_distribution.dim_3d += 1,
                         _ => stats.shape_distribution.dim_4d_plus += 1,
                     }
-                    if stats.shape_distribution.min_elements == 0 || numel < stats.shape_distribution.min_elements {
+                    if stats.shape_distribution.min_elements == 0
+                        || numel < stats.shape_distribution.min_elements
+                    {
                         stats.shape_distribution.min_elements = numel;
                     }
                     if numel > stats.shape_distribution.max_elements {
@@ -273,12 +315,19 @@ fn collect_tensor_mappings_with_stats(safetensor_files: &[std::path::PathBuf]) -
 
             // Log header size for debugging large files
             if header_size > 1_000_000 {
-                eprintln!("  (header: {} KB for {})", header_size / 1024, file_path.display());
+                eprintln!(
+                    "  (header: {} KB for {})",
+                    header_size / 1024,
+                    file_path.display()
+                );
             }
 
             // Progress update
             let count = processed_files.fetch_add(1, Ordering::Relaxed) + 1;
-            eprint!("\rProcessed {}/{} files ({} tensors)...", count, total_files, stats.total_tensors);
+            eprint!(
+                "\rProcessed {}/{} files ({} tensors)...",
+                count, total_files, stats.total_tensors
+            );
             use std::io::Write;
             let _ = std::io::stderr().flush();
 
@@ -311,7 +360,11 @@ fn collect_tensor_mappings(safetensor_files: &[std::path::PathBuf]) -> Result<Ve
 }
 
 /// Write the final metadata.json file.
-fn write_import_metadata(output_dir: &Path, config: &ImportConfig, saved: &[SavedTensor]) -> Result<()> {
+fn write_import_metadata(
+    output_dir: &Path,
+    config: &ImportConfig,
+    saved: &[SavedTensor],
+) -> Result<()> {
     // Build tensor_name_map with nested structure for N-D tensors
     let mut tensor_name_map = serde_json::Map::new();
     let mut nd_tensors: HashMap<String, Vec<&SavedTensor>> = HashMap::new();
@@ -333,19 +386,28 @@ fn write_import_metadata(output_dir: &Path, config: &ImportConfig, saved: &[Save
         let mut planes = planes;
         planes.sort_by_key(|p| p.plane_index.unwrap_or(0));
 
-        let first = planes.first().ok_or_else(|| anyhow::anyhow!("No planes found for N-D tensor: {}", base_name))?;
-        let original_shape = first.original_shape.as_ref().ok_or_else(|| anyhow::anyhow!("Missing original_shape for N-D tensor: {}", base_name))?;
-        let num_planes = first.num_planes.ok_or_else(|| anyhow::anyhow!("Missing num_planes for N-D tensor: {}", base_name))?;
+        let first = planes
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("No planes found for N-D tensor: {}", base_name))?;
+        let original_shape = first.original_shape.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("Missing original_shape for N-D tensor: {}", base_name)
+        })?;
+        let num_planes = first
+            .num_planes
+            .ok_or_else(|| anyhow::anyhow!("Missing num_planes for N-D tensor: {}", base_name))?;
         let (rows, cols) = first.matrix_shape;
 
         let plane_uuids: Vec<&str> = planes.iter().map(|p| p.uuid.as_str()).collect();
 
-        tensor_name_map.insert(base_name, serde_json::json!({
-            "original_shape": original_shape,
-            "matrix_shape": [rows, cols],
-            "num_planes": num_planes,
-            "plane_uuids": plane_uuids,
-        }));
+        tensor_name_map.insert(
+            base_name,
+            serde_json::json!({
+                "original_shape": original_shape,
+                "matrix_shape": [rows, cols],
+                "num_planes": num_planes,
+                "plane_uuids": plane_uuids,
+            }),
+        );
     }
 
     let metadata_json = serde_json::json!({
@@ -382,7 +444,12 @@ fn parse_block_format(s: &str) -> Result<BlockFormat> {
 /// Pipe trait for fluent syntax.
 #[allow(dead_code)]
 trait Pipe: Sized {
-    fn pipe<F, R>(self, f: F) -> R where F: FnOnce(Self) -> R { f(self) }
+    fn pipe<F, R>(self, f: F) -> R
+    where
+        F: FnOnce(Self) -> R,
+    {
+        f(self)
+    }
 }
 impl<T> Pipe for T {}
 
@@ -392,7 +459,10 @@ mod tests {
 
     #[test]
     fn test_parse_block_format_b8x8() {
-        assert!(matches!(parse_block_format("B8x8").unwrap(), BlockFormat::B8x8));
+        assert!(matches!(
+            parse_block_format("B8x8").unwrap(),
+            BlockFormat::B8x8
+        ));
     }
 
     #[test]
@@ -410,7 +480,12 @@ mod tests {
     fn test_parse_block_format_unknown() {
         let result = parse_block_format("B32x32");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown block format"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown block format")
+        );
     }
 
     #[test]
@@ -421,9 +496,21 @@ mod tests {
     #[test]
     fn test_tensor_map_filters_excluded() {
         let mappings = [
-            TensorMapping { source: "t1".into(), target: "u1".into(), include: true },
-            TensorMapping { source: "t2".into(), target: "u2".into(), include: false },
-            TensorMapping { source: "t3".into(), target: "u3".into(), include: true },
+            TensorMapping {
+                source: "t1".into(),
+                target: "u1".into(),
+                include: true,
+            },
+            TensorMapping {
+                source: "t2".into(),
+                target: "u2".into(),
+                include: false,
+            },
+            TensorMapping {
+                source: "t3".into(),
+                target: "u3".into(),
+                include: true,
+            },
         ];
 
         let tensor_map: HashMap<String, String> = mappings

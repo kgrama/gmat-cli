@@ -28,15 +28,19 @@ pub struct TraversalConfig {
 impl TraversalConfig {
     /// Create a new traversal configuration
     pub fn new(shape: (usize, usize), block_size: usize, is_dual_row: bool) -> Self {
-        Self { shape, block_size, is_dual_row }
+        Self {
+            shape,
+            block_size,
+            is_dual_row,
+        }
     }
 
     /// Calculate blocks per row (or per column for col-major)
     #[inline]
     pub fn blocks_per_dim(&self, axis: Axis) -> usize {
         let dim_size = match axis {
-            Axis::Row => self.shape.1,  // cols
-            Axis::Col => self.shape.0,  // rows
+            Axis::Row => self.shape.1, // cols
+            Axis::Col => self.shape.0, // rows
         };
         dim_size.div_ceil(self.block_size)
     }
@@ -55,15 +59,19 @@ impl TraversalConfig {
     /// For dual-row formats, get which sub-row (0 or 1) within the block
     #[inline]
     pub fn row_in_block(&self, row: usize) -> usize {
-        if self.is_dual_row { row % 2 } else { 0 }
+        if self.is_dual_row {
+            row % 2
+        } else {
+            0
+        }
     }
 
     /// Get the dimension size for bounds checking
     #[inline]
     pub fn dim_size(&self, axis: Axis) -> usize {
         match axis {
-            Axis::Row => self.shape.1,  // cols
-            Axis::Col => self.shape.0,  // rows
+            Axis::Row => self.shape.1, // cols
+            Axis::Col => self.shape.0, // rows
         }
     }
 }
@@ -89,13 +97,13 @@ pub struct BlockTraversal<'a> {
 
 impl<'a> BlockTraversal<'a> {
     /// Create a new block traversal
-    pub fn new(
-        blocks: &'a [AnyBlock],
-        config: TraversalConfig,
-        axis: Axis,
-        index: usize,
-    ) -> Self {
-        Self { blocks, config, axis, index }
+    pub fn new(blocks: &'a [AnyBlock], config: TraversalConfig, axis: Axis, index: usize) -> Self {
+        Self {
+            blocks,
+            config,
+            axis,
+            index,
+        }
     }
 
     /// Create a row traversal
@@ -132,7 +140,7 @@ impl<'a> BlockTraversal<'a> {
         if self.axis == Axis::Row {
             self.config.row_in_block(self.index)
         } else {
-            0  // Column traversal always uses row 0 of transposed blocks
+            0 // Column traversal always uses row 0 of transposed blocks
         }
     }
 
@@ -166,7 +174,7 @@ impl<'a> BlockTraversal<'a> {
             let block_start = block_idx * block_size;
 
             // Use row_iter for dual-row row traversal, iter() otherwise
-            let iter: Box<dyn Iterator<Item = (usize, f32)> + '_> = 
+            let iter: Box<dyn Iterator<Item = (usize, f32)> + '_> =
                 if is_dual_row && axis == Axis::Row {
                     block.row_iter(row_in_block)
                 } else {
@@ -200,7 +208,7 @@ impl<'a> BlockTraversal<'a> {
             let block_start = block_idx * block_size;
 
             // Use log_row_iter for dual-row row traversal, log_iter() otherwise
-            let iter: Box<dyn Iterator<Item = (usize, f32, u8)> + '_> = 
+            let iter: Box<dyn Iterator<Item = (usize, f32, u8)> + '_> =
                 if is_dual_row && axis == Axis::Row {
                     block.log_row_iter(row_in_block)
                 } else {
@@ -224,7 +232,7 @@ impl<'a> BlockTraversal<'a> {
     }
 
     /// Iterate over ALL elements (including zeros) in dense order.
-    /// 
+    ///
     /// Returns an iterator of (global_idx, value) pairs for every element
     /// in the row/column, including zeros. Useful for dense decoding.
     pub fn dense_iter(&self) -> impl Iterator<Item = (usize, f32)> + 'a {
@@ -250,19 +258,23 @@ impl<'a> BlockTraversal<'a> {
     }
 
     /// Decode all elements into a pre-allocated buffer.
-    /// 
+    ///
     /// This is more efficient than dense_iter() when you need all values
     /// in a contiguous buffer, as it avoids iterator overhead.
-    /// 
+    ///
     /// # Arguments
     /// - `buffer`: Pre-allocated buffer of size >= dim_size
-    /// 
+    ///
     /// # Panics
     /// Panics if buffer is smaller than dim_size
     pub fn decode_to_buffer(&self, buffer: &mut [f32]) {
         let dim_size = self.dim_size();
-        assert!(buffer.len() >= dim_size, 
-            "Buffer size {} is smaller than dimension size {}", buffer.len(), dim_size);
+        assert!(
+            buffer.len() >= dim_size,
+            "Buffer size {} is smaller than dimension size {}",
+            buffer.len(),
+            dim_size
+        );
 
         let row_in_block = self.row_in_block();
         let block_offset = self.block_offset();
@@ -285,7 +297,7 @@ impl<'a> BlockTraversal<'a> {
 pub trait BlockTraversable {
     /// Get the block slice for traversal
     fn blocks(&self) -> &[AnyBlock];
-    
+
     /// Get the traversal configuration
     fn traversal_config(&self) -> TraversalConfig;
 
@@ -399,7 +411,7 @@ mod tests {
     fn test_traversal_config() {
         let config = TraversalConfig::new((100, 200), 16, false);
         assert_eq!(config.blocks_per_dim(Axis::Row), 13); // ceil(200/16)
-        assert_eq!(config.blocks_per_dim(Axis::Col), 7);  // ceil(100/16)
+        assert_eq!(config.blocks_per_dim(Axis::Col), 7); // ceil(100/16)
         assert_eq!(config.block_offset(5, Axis::Row), 5 * 13);
         assert_eq!(config.row_in_block(5), 0); // not dual-row
     }
@@ -413,7 +425,7 @@ mod tests {
         assert_eq!(config.row_in_block(3), 1);
         // Block offset should be halved for dual-row
         assert_eq!(config.block_offset(0, Axis::Row), 0);
-        assert_eq!(config.block_offset(1, Axis::Row), 0);  // same block pair
+        assert_eq!(config.block_offset(1, Axis::Row), 0); // same block pair
         assert_eq!(config.block_offset(2, Axis::Row), 13); // next block pair
     }
 }

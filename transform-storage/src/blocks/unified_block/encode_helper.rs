@@ -1,6 +1,6 @@
 //! EncodeHelper trait for dispatching encoding based on block size
 
-use super::super::configs::{Config8x4, Config8x8, Config16x4, Config16x8};
+use super::super::configs::{Config16x4, Config16x8, Config8x4, Config8x8};
 use crate::block::{encode_values, EncodedBlock};
 
 // ============================================================================

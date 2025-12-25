@@ -3,9 +3,9 @@
 //! Extracts model configuration and tensor metadata from SafeTensor files
 //! and imports them into GraphMatrix format with preserved metadata.
 
-use crate::formats::{GmatMetadata, metadata_keys};
-use safetensors::SafeTensors;
+use crate::formats::{metadata_keys, GmatMetadata};
 use safetensors::tensor::Metadata;
+use safetensors::SafeTensors;
 
 /// Detect dtype string from SafeTensor tensor dtype
 fn dtype_to_string(dtype: safetensors::Dtype) -> &'static str {
@@ -70,10 +70,7 @@ fn extract_from_st_metadata(st_metadata: &Metadata, gmat_metadata: &mut GmatMeta
 ///
 /// # Returns
 /// GmatMetadata with extracted information
-pub fn extract_metadata(
-    safetensor: &SafeTensors,
-    tensor_name: Option<&str>,
-) -> GmatMetadata {
+pub fn extract_metadata(safetensor: &SafeTensors, tensor_name: Option<&str>) -> GmatMetadata {
     let mut metadata = GmatMetadata::new();
 
     // Set source format
@@ -122,12 +119,12 @@ pub fn extract_metadata_from_bytes(
     // First read the metadata from the header
     let (_, st_metadata) = SafeTensors::read_metadata(data)
         .map_err(|e| format!("Failed to read SafeTensor metadata: {}", e))?;
-    
+
     let safetensor = SafeTensors::deserialize(data)
         .map_err(|e| format!("Failed to deserialize SafeTensor: {}", e))?;
 
     let mut metadata = extract_metadata(&safetensor, tensor_name);
-    
+
     // Extract config from SafeTensor metadata
     extract_from_st_metadata(&st_metadata, &mut metadata);
 

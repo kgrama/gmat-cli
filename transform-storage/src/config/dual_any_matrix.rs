@@ -2,7 +2,7 @@
 
 use crate::blocks::BlockFormat;
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{Device, Tensor, Result};
+use candle_core::{Device, Result, Tensor};
 
 /// Type-erased wrapper for GraphMatrix with dual-row block formats.
 #[derive(Debug, Clone)]
@@ -17,10 +17,26 @@ impl DualAnyGraphMatrix {
     /// Create DualAnyGraphMatrix from dense f32 data with configuration.
     pub fn from_dense(data: &[f32], shape: (usize, usize), config: &super::StorageConfig) -> Self {
         match config.get_format() {
-            BlockFormat::DualRow8x4 => Self::DualRow8x4(GraphMatrix::from_dense(data, shape, BlockFormat::DualRow8x4)),
-            BlockFormat::DualRow8x8 => Self::DualRow8x8(GraphMatrix::from_dense(data, shape, BlockFormat::DualRow8x8)),
-            BlockFormat::DualRow16x4 => Self::DualRow16x4(GraphMatrix::from_dense(data, shape, BlockFormat::DualRow16x4)),
-            BlockFormat::DualRow16x8 => Self::DualRow16x8(GraphMatrix::from_dense(data, shape, BlockFormat::DualRow16x8)),
+            BlockFormat::DualRow8x4 => Self::DualRow8x4(GraphMatrix::from_dense(
+                data,
+                shape,
+                BlockFormat::DualRow8x4,
+            )),
+            BlockFormat::DualRow8x8 => Self::DualRow8x8(GraphMatrix::from_dense(
+                data,
+                shape,
+                BlockFormat::DualRow8x8,
+            )),
+            BlockFormat::DualRow16x4 => Self::DualRow16x4(GraphMatrix::from_dense(
+                data,
+                shape,
+                BlockFormat::DualRow16x4,
+            )),
+            BlockFormat::DualRow16x8 => Self::DualRow16x8(GraphMatrix::from_dense(
+                data,
+                shape,
+                BlockFormat::DualRow16x8,
+            )),
             BlockFormat::B8x4 | BlockFormat::B8x8 | BlockFormat::B16x4 | BlockFormat::B16x8 => {
                 panic!("DualAnyGraphMatrix does not support single-row formats")
             }
@@ -117,19 +133,31 @@ impl DualAnyGraphMatrix {
     // Type accessors - Option versions
 
     pub fn try_as_dualrow8x4(&self) -> Option<&GraphMatrix> {
-        match self { Self::DualRow8x4(m) => Some(m), _ => None }
+        match self {
+            Self::DualRow8x4(m) => Some(m),
+            _ => None,
+        }
     }
 
     pub fn try_as_dualrow8x8(&self) -> Option<&GraphMatrix> {
-        match self { Self::DualRow8x8(m) => Some(m), _ => None }
+        match self {
+            Self::DualRow8x8(m) => Some(m),
+            _ => None,
+        }
     }
 
     pub fn try_as_dualrow16x4(&self) -> Option<&GraphMatrix> {
-        match self { Self::DualRow16x4(m) => Some(m), _ => None }
+        match self {
+            Self::DualRow16x4(m) => Some(m),
+            _ => None,
+        }
     }
 
     pub fn try_as_dualrow16x8(&self) -> Option<&GraphMatrix> {
-        match self { Self::DualRow16x8(m) => Some(m), _ => None }
+        match self {
+            Self::DualRow16x8(m) => Some(m),
+            _ => None,
+        }
     }
 
     /// Create DualAnyGraphMatrix from a candle Tensor with configuration.
@@ -144,10 +172,18 @@ impl DualAnyGraphMatrix {
     /// Returns error if tensor extraction fails or tensor is not 2D
     pub fn from_tensor(tensor: &Tensor, config: &super::StorageConfig) -> Result<Self> {
         Ok(match config.get_format() {
-            BlockFormat::DualRow8x4 => Self::DualRow8x4(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow8x4)?),
-            BlockFormat::DualRow8x8 => Self::DualRow8x8(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow8x8)?),
-            BlockFormat::DualRow16x4 => Self::DualRow16x4(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow16x4)?),
-            BlockFormat::DualRow16x8 => Self::DualRow16x8(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow16x8)?),
+            BlockFormat::DualRow8x4 => {
+                Self::DualRow8x4(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow8x4)?)
+            }
+            BlockFormat::DualRow8x8 => {
+                Self::DualRow8x8(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow8x8)?)
+            }
+            BlockFormat::DualRow16x4 => {
+                Self::DualRow16x4(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow16x4)?)
+            }
+            BlockFormat::DualRow16x8 => {
+                Self::DualRow16x8(GraphMatrix::from_tensor(tensor, BlockFormat::DualRow16x8)?)
+            }
             BlockFormat::B8x4 | BlockFormat::B8x8 | BlockFormat::B16x4 | BlockFormat::B16x8 => {
                 panic!("DualAnyGraphMatrix does not support single-row formats")
             }
@@ -232,10 +268,18 @@ impl DualAnyGraphMatrix {
         file.seek(SeekFrom::Start(0))?;
 
         match format {
-            BlockFormat::DualRow8x4 => Ok(Self::DualRow8x4(GraphMatrix::load_from_reader(&mut file)?)),
-            BlockFormat::DualRow8x8 => Ok(Self::DualRow8x8(GraphMatrix::load_from_reader(&mut file)?)),
-            BlockFormat::DualRow16x4 => Ok(Self::DualRow16x4(GraphMatrix::load_from_reader(&mut file)?)),
-            BlockFormat::DualRow16x8 => Ok(Self::DualRow16x8(GraphMatrix::load_from_reader(&mut file)?)),
+            BlockFormat::DualRow8x4 => {
+                Ok(Self::DualRow8x4(GraphMatrix::load_from_reader(&mut file)?))
+            }
+            BlockFormat::DualRow8x8 => {
+                Ok(Self::DualRow8x8(GraphMatrix::load_from_reader(&mut file)?))
+            }
+            BlockFormat::DualRow16x4 => {
+                Ok(Self::DualRow16x4(GraphMatrix::load_from_reader(&mut file)?))
+            }
+            BlockFormat::DualRow16x8 => {
+                Ok(Self::DualRow16x8(GraphMatrix::load_from_reader(&mut file)?))
+            }
             BlockFormat::B8x4 | BlockFormat::B8x8 | BlockFormat::B16x4 | BlockFormat::B16x8 => {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -340,10 +384,10 @@ mod tests {
         let data = narrow_range_data(8, 4);
         let config = StorageConfig::new().format(BlockFormat::DualRow8x4);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (4, 8), &config);
-        
+
         let temp_file = NamedTempFile::new().unwrap();
         matrix.save(temp_file.path()).unwrap();
-        
+
         let loaded = DualAnyGraphMatrix::load(temp_file.path()).unwrap();
         assert_eq!(loaded.format(), BlockFormat::DualRow8x4);
         assert_eq!(loaded.shape(), (4, 8));
@@ -351,8 +395,17 @@ mod tests {
 
     #[test]
     fn test_dual_any_graph_matrix_save_load_all_formats() {
-        for format in [BlockFormat::DualRow8x4, BlockFormat::DualRow8x8, BlockFormat::DualRow16x4, BlockFormat::DualRow16x8] {
-            let cols = if format == BlockFormat::DualRow8x4 || format == BlockFormat::DualRow8x8 { 8 } else { 16 };
+        for format in [
+            BlockFormat::DualRow8x4,
+            BlockFormat::DualRow8x8,
+            BlockFormat::DualRow16x4,
+            BlockFormat::DualRow16x8,
+        ] {
+            let cols = if format == BlockFormat::DualRow8x4 || format == BlockFormat::DualRow8x8 {
+                8
+            } else {
+                16
+            };
             let data = narrow_range_data(cols, 4);
             let config = StorageConfig::new().format(format);
             let matrix = DualAnyGraphMatrix::from_dense(&data, (4, cols), &config);
@@ -361,7 +414,11 @@ mod tests {
             matrix.save(temp_file.path()).unwrap();
 
             let loaded = DualAnyGraphMatrix::load(temp_file.path()).unwrap();
-            assert_eq!(loaded.format(), format, "Format should be preserved after save/load");
+            assert_eq!(
+                loaded.format(),
+                format,
+                "Format should be preserved after save/load"
+            );
             assert_eq!(loaded.shape(), (4, cols));
         }
     }
@@ -372,7 +429,7 @@ mod tests {
         let data = narrow_range_data(16, 4);
         let config = StorageConfig::new().format(BlockFormat::DualRow16x8);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (4, 16), &config);
-        
+
         let tensor = matrix.to_tensor(&Device::Cpu).unwrap();
         assert_eq!(tensor.dims(), &[4, 16]);
     }
@@ -393,8 +450,17 @@ mod tests {
     fn test_dual_any_graph_matrix_tensor_roundtrip_all_formats() {
         let device = Device::Cpu;
 
-        for format in [BlockFormat::DualRow8x4, BlockFormat::DualRow8x8, BlockFormat::DualRow16x4, BlockFormat::DualRow16x8] {
-            let cols = if format == BlockFormat::DualRow8x4 || format == BlockFormat::DualRow8x8 { 8 } else { 16 };
+        for format in [
+            BlockFormat::DualRow8x4,
+            BlockFormat::DualRow8x8,
+            BlockFormat::DualRow16x4,
+            BlockFormat::DualRow16x8,
+        ] {
+            let cols = if format == BlockFormat::DualRow8x4 || format == BlockFormat::DualRow8x8 {
+                8
+            } else {
+                16
+            };
             let data = narrow_range_data(cols, 4);
             let tensor = Tensor::from_vec(data, (4, cols), &device).unwrap();
 
@@ -411,7 +477,7 @@ mod tests {
         let data = narrow_range_data(8, 4);
         let config = StorageConfig::new().format(BlockFormat::DualRow8x4);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (4, 8), &config);
-        
+
         assert!(matrix.try_as_dualrow8x4().is_some());
         assert!(matrix.try_as_dualrow8x8().is_none());
         assert!(matrix.try_as_dualrow16x4().is_none());
@@ -469,7 +535,7 @@ mod tests {
         let data = narrow_range_data(8, 3); // 3 rows - odd!
         let config = StorageConfig::new().format(BlockFormat::DualRow8x4);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (3, 8), &config);
-        
+
         assert_eq!(matrix.shape(), (3, 8));
         assert!(matrix.nnz() > 0);
     }
@@ -493,7 +559,7 @@ mod tests {
         let data = narrow_range_data(8, 1); // 1 row
         let config = StorageConfig::new().format(BlockFormat::DualRow8x4);
         let matrix = DualAnyGraphMatrix::from_dense(&data, (1, 8), &config);
-        
+
         assert_eq!(matrix.shape(), (1, 8));
     }
 

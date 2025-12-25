@@ -1,7 +1,7 @@
 //! Tests for GraphMatrix
 
-use super::graph_matrix::GraphMatrix;
 use super::blocks::{AnyBlock, BlockFormat};
+use super::graph_matrix::GraphMatrix;
 use candle_core::{Device, Tensor};
 use tempfile::NamedTempFile;
 
@@ -11,10 +11,7 @@ use tempfile::NamedTempFile;
 
 #[test]
 fn test_from_dense_basic() {
-    let data = vec![
-        1.0, 0.0, 2.0, 0.0,
-        0.0, 3.0, 0.0, 4.0,
-    ];
+    let data = vec![1.0, 0.0, 2.0, 0.0, 0.0, 3.0, 0.0, 4.0];
     let matrix = GraphMatrix::from_dense(&data, (2, 4), BlockFormat::B16x8);
 
     assert_eq!(matrix.shape(), (2, 4));
@@ -77,7 +74,8 @@ fn test_from_blocks_valid() {
 #[should_panic(expected = "Block count mismatch")]
 fn test_from_blocks_wrong_count() {
     let blocks = vec![AnyBlock::encode_16x8(&[1.0; 16])];
-    let _matrix = GraphMatrix::from_blocks(blocks, (2, 16), BlockFormat::B16x8); // expects 2 blocks
+    let _matrix = GraphMatrix::from_blocks(blocks, (2, 16), BlockFormat::B16x8);
+    // expects 2 blocks
 }
 
 // ========================================================================
@@ -120,10 +118,10 @@ fn test_density_empty_matrix() {
 #[test]
 fn test_row_iter_basic() {
     let mut data = vec![0.0f32; 32];
-    data[0] = 1.0;   // row 0, col 0
-    data[5] = 2.0;   // row 0, col 5
-    data[16] = 3.0;  // row 1, col 0
-    data[20] = 4.0;  // row 1, col 4
+    data[0] = 1.0; // row 0, col 0
+    data[5] = 2.0; // row 0, col 5
+    data[16] = 3.0; // row 1, col 0
+    data[20] = 4.0; // row 1, col 4
 
     let matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
 
@@ -210,9 +208,9 @@ fn test_build_col_index() {
 #[test]
 fn test_col_iter_basic() {
     let mut data = vec![0.0f32; 32];
-    data[0] = 1.0;   // row 0, col 0
-    data[16] = 2.0;  // row 1, col 0
-    data[5] = 3.0;   // row 0, col 5
+    data[0] = 1.0; // row 0, col 0
+    data[16] = 2.0; // row 1, col 0
+    data[5] = 3.0; // row 0, col 5
 
     let mut matrix = GraphMatrix::from_dense(&data, (2, 16), BlockFormat::B16x8);
     matrix.build_col_index();
@@ -389,7 +387,9 @@ fn test_tensor_roundtrip() {
             // e1m7 has ~4 octave range, expect ratio within 0.9-1.1
             assert!(
                 (0.9..1.1).contains(&ratio),
-                "orig={}, restored={}", orig, rest
+                "orig={}, restored={}",
+                orig,
+                rest
             );
         }
     }
@@ -433,7 +433,11 @@ fn test_block16x4_matrix() {
 /// Compute relative reconstruction error: |original - reconstructed| / |original|
 fn relative_error(original: f32, reconstructed: f32) -> f32 {
     if original == 0.0 {
-        if reconstructed == 0.0 { 0.0 } else { f32::INFINITY }
+        if reconstructed == 0.0 {
+            0.0
+        } else {
+            f32::INFINITY
+        }
     } else {
         (original - reconstructed).abs() / original.abs()
     }
@@ -444,8 +448,7 @@ fn test_log_sparse_reconstruction_error_block8x8() {
     // Use two Block8x8 blocks for 16 values - each block handles narrower range
     // Values 2-16 span too many octaves for single block's offset range from median
     let data: [f32; 16] = [
-        2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0, -9.0,
-        10.0, -11.0, 12.0, -14.0, 16.0, 0.0, 0.0, 0.0,
+        2.0, -3.0, 4.0, -5.0, 6.0, -7.0, 8.0, -9.0, 10.0, -11.0, 12.0, -14.0, 16.0, 0.0, 0.0, 0.0,
     ];
 
     // Split into two matrices with Block8x8
@@ -464,8 +467,13 @@ fn test_log_sparse_reconstruction_error_block8x8() {
     // Check first block
     for (&orig, &recon) in data[0..8].iter().zip(linear1.values.iter()) {
         if orig != 0.0 {
-            assert_eq!(orig.signum(), recon.signum(),
-                "Sign mismatch: original={}, reconstructed={}", orig, recon);
+            assert_eq!(
+                orig.signum(),
+                recon.signum(),
+                "Sign mismatch: original={}, reconstructed={}",
+                orig,
+                recon
+            );
             let err = relative_error(orig, recon);
             max_error = max_error.max(err);
             sum_error += err;
@@ -476,8 +484,13 @@ fn test_log_sparse_reconstruction_error_block8x8() {
     // Check second block
     for (&orig, &recon) in data[8..16].iter().zip(linear2.values.iter()) {
         if orig != 0.0 {
-            assert_eq!(orig.signum(), recon.signum(),
-                "Sign mismatch: original={}, reconstructed={}", orig, recon);
+            assert_eq!(
+                orig.signum(),
+                recon.signum(),
+                "Sign mismatch: original={}, reconstructed={}",
+                orig,
+                recon
+            );
             let err = relative_error(orig, recon);
             max_error = max_error.max(err);
             sum_error += err;
@@ -488,10 +501,21 @@ fn test_log_sparse_reconstruction_error_block8x8() {
     let avg_error = sum_error / count as f32;
 
     // e1m7 (8-bit) should have < 2% average error for values within each block's range
-    println!("Block8x8 (e1m7): avg_error={:.4}%, max_error={:.4}%",
-        avg_error * 100.0, max_error * 100.0);
-    assert!(avg_error < 0.03, "Average error {:.4}% exceeds 3%", avg_error * 100.0);
-    assert!(max_error < 0.08, "Max error {:.4}% exceeds 8%", max_error * 100.0);
+    println!(
+        "Block8x8 (e1m7): avg_error={:.4}%, max_error={:.4}%",
+        avg_error * 100.0,
+        max_error * 100.0
+    );
+    assert!(
+        avg_error < 0.03,
+        "Average error {:.4}% exceeds 3%",
+        avg_error * 100.0
+    );
+    assert!(
+        max_error < 0.08,
+        "Max error {:.4}% exceeds 8%",
+        max_error * 100.0
+    );
 }
 
 #[test]
@@ -499,8 +523,7 @@ fn test_log_sparse_reconstruction_error_block16x4() {
     // e0m4 encodes offsets in [0.0, 1.0) from median, so ~1 octave range
     // Using values from 8.0 to 12.0 (factor 1.5 = 0.58 octaves)
     let data: [f32; 16] = [
-        8.0, -8.5, 9.0, -9.5, 10.0, -10.5, 11.0, -11.5,
-        12.0, -8.2, 9.2, -10.2, 11.2, 0.0, 0.0, 0.0,
+        8.0, -8.5, 9.0, -9.5, 10.0, -10.5, 11.0, -11.5, 12.0, -8.2, 9.2, -10.2, 11.2, 0.0, 0.0, 0.0,
     ];
 
     let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x4);
@@ -513,8 +536,13 @@ fn test_log_sparse_reconstruction_error_block16x4() {
 
     for (&orig, &recon) in data.iter().zip(linear.values.iter()) {
         if orig != 0.0 {
-            assert_eq!(orig.signum(), recon.signum(),
-                "Sign mismatch: original={}, reconstructed={}", orig, recon);
+            assert_eq!(
+                orig.signum(),
+                recon.signum(),
+                "Sign mismatch: original={}, reconstructed={}",
+                orig,
+                recon
+            );
 
             let err = relative_error(orig, recon);
             max_error = max_error.max(err);
@@ -526,10 +554,21 @@ fn test_log_sparse_reconstruction_error_block16x4() {
     let avg_error = sum_error / count as f32;
 
     // e0m4 (4-bit) has lower precision, expect < 10% average error
-    println!("Block16x4 (e0m4): avg_error={:.4}%, max_error={:.4}%",
-        avg_error * 100.0, max_error * 100.0);
-    assert!(avg_error < 0.15, "Average error {:.4}% exceeds 15%", avg_error * 100.0);
-    assert!(max_error < 0.30, "Max error {:.4}% exceeds 30%", max_error * 100.0);
+    println!(
+        "Block16x4 (e0m4): avg_error={:.4}%, max_error={:.4}%",
+        avg_error * 100.0,
+        max_error * 100.0
+    );
+    assert!(
+        avg_error < 0.15,
+        "Average error {:.4}% exceeds 15%",
+        avg_error * 100.0
+    );
+    assert!(
+        max_error < 0.30,
+        "Max error {:.4}% exceeds 30%",
+        max_error * 100.0
+    );
 }
 
 #[test]
@@ -548,8 +587,13 @@ fn test_log_sparse_reconstruction_error_block8x4() {
 
     for (&orig, &recon) in data.iter().zip(linear.values.iter()) {
         if orig != 0.0 {
-            assert_eq!(orig.signum(), recon.signum(),
-                "Sign mismatch: original={}, reconstructed={}", orig, recon);
+            assert_eq!(
+                orig.signum(),
+                recon.signum(),
+                "Sign mismatch: original={}, reconstructed={}",
+                orig,
+                recon
+            );
 
             let err = relative_error(orig, recon);
             max_error = max_error.max(err);
@@ -561,18 +605,28 @@ fn test_log_sparse_reconstruction_error_block8x4() {
     let avg_error = sum_error / count as f32;
 
     // e0m4 (4-bit) has lower precision
-    println!("Block8x4 (e0m4): avg_error={:.4}%, max_error={:.4}%",
-        avg_error * 100.0, max_error * 100.0);
-    assert!(avg_error < 0.15, "Average error {:.4}% exceeds 15%", avg_error * 100.0);
-    assert!(max_error < 0.30, "Max error {:.4}% exceeds 30%", max_error * 100.0);
+    println!(
+        "Block8x4 (e0m4): avg_error={:.4}%, max_error={:.4}%",
+        avg_error * 100.0,
+        max_error * 100.0
+    );
+    assert!(
+        avg_error < 0.15,
+        "Average error {:.4}% exceeds 15%",
+        avg_error * 100.0
+    );
+    assert!(
+        max_error < 0.30,
+        "Max error {:.4}% exceeds 30%",
+        max_error * 100.0
+    );
 }
 
 #[test]
 fn test_log_sparse_csr_matches_coo() {
     // Verify CSR and COO produce same results
     let data: [f32; 16] = [
-        4.0, -5.0, 6.0, -7.0, 8.0, -9.0, 10.0, -11.0,
-        12.0, -13.0, 14.0, -15.0, 16.0, 0.0, 0.0, 0.0,
+        4.0, -5.0, 6.0, -7.0, 8.0, -9.0, 10.0, -11.0, 12.0, -13.0, 14.0, -15.0, 16.0, 0.0, 0.0, 0.0,
     ];
 
     let matrix = GraphMatrix::from_dense(&data, (1, 16), BlockFormat::B16x8);
@@ -585,7 +639,11 @@ fn test_log_sparse_csr_matches_coo() {
 
     assert_eq!(linear_coo.values.len(), linear_csr.values.len());
     for (coo_val, csr_val) in linear_coo.values.iter().zip(linear_csr.values.iter()) {
-        assert!((coo_val - csr_val).abs() < 1e-6,
-            "COO={} vs CSR={}", coo_val, csr_val);
+        assert!(
+            (coo_val - csr_val).abs() < 1e-6,
+            "COO={} vs CSR={}",
+            coo_val,
+            csr_val
+        );
     }
 }

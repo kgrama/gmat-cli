@@ -220,7 +220,11 @@ mod tests {
         // Offset of 0.0 should encode and decode back to approximately 0.0
         let encoded = encode_e1m7(0.0);
         let decoded = decode_e1m7(encoded);
-        assert!((decoded - 0.0).abs() < 0.01, "Expected ~0.0, got {}", decoded);
+        assert!(
+            (decoded - 0.0).abs() < 0.01,
+            "Expected ~0.0, got {}",
+            decoded
+        );
     }
 
     #[test]
@@ -231,7 +235,10 @@ mod tests {
             let decoded = decode_e1m7(encoded);
             assert!(
                 (decoded - offset).abs() < 0.01,
-                "Offset {} encoded to {} decoded to {}", offset, encoded, decoded
+                "Offset {} encoded to {} decoded to {}",
+                offset,
+                encoded,
+                decoded
             );
         }
     }
@@ -245,7 +252,11 @@ mod tests {
 
         let encoded_high = encode_e1m7(3.0);
         let decoded_high = decode_e1m7(encoded_high);
-        assert!(decoded_high < 2.0, "Should clamp to < 2.0, got {}", decoded_high);
+        assert!(
+            decoded_high < 2.0,
+            "Should clamp to < 2.0, got {}",
+            decoded_high
+        );
     }
 
     // ========================================================================
@@ -269,7 +280,10 @@ mod tests {
             let decoded = decode_e0m4(encoded);
             assert!(
                 (decoded - offset).abs() < 0.07,
-                "Offset {} encoded to {} decoded to {}", offset, encoded, decoded
+                "Offset {} encoded to {} decoded to {}",
+                offset,
+                encoded,
+                decoded
             );
         }
     }
@@ -325,7 +339,8 @@ mod tests {
             assert_eq!(
                 get_packed_nibble(&magnitudes, i),
                 (i as u8) % 16,
-                "Index {} failed", i
+                "Index {} failed",
+                i
             );
         }
     }

@@ -10,11 +10,13 @@ use half::f16;
 use std::collections::HashMap;
 
 use super::pack_simple::quantize_simple_packed;
-use super::types::{ActivationStats, PackFormat, QuantDType, QuantParams, QuantizedTensors, TrellisConfig};
+use super::types::{
+    ActivationStats, PackFormat, QuantDType, QuantParams, QuantizedTensors, TrellisConfig,
+};
 
 const LAMBDA: f32 = 0.3; // Smoothness penalty
-const GAMMA: f32 = 0.2;  // Dual-row coupling
-const TOP_K: usize = 8;  // Candidate states
+const GAMMA: f32 = 0.2; // Dual-row coupling
+const TOP_K: usize = 8; // Candidate states
 
 /// Compute quantization error: (true_offset - decoded_offset)²
 fn compute_quant_error(true_offset: f32, state: u8, num_states: usize) -> f32 {
@@ -127,7 +129,8 @@ fn trellis_dual(
                             let err1 = compute_quant_error(offsets1[i], curr_s1, num_states);
                             let trans0 = compute_transition_cost(prev_s0, curr_s0, lambda);
                             let trans1 = compute_transition_cost(prev_s1, curr_s1, lambda);
-                            let coupling = gamma * (curr_s0 as i16 - curr_s1 as i16).unsigned_abs() as f32;
+                            let coupling =
+                                gamma * (curr_s0 as i16 - curr_s1 as i16).unsigned_abs() as f32;
 
                             let candidate = prev_cost + err0 + err1 + trans0 + trans1 + coupling;
 
@@ -184,7 +187,9 @@ fn pack_nibbles(values: &[u8], start: usize, end: usize) -> u32 {
 fn normalize_block(values: &[f32], scale: f32, num_states: usize) -> Vec<f32> {
     values
         .iter()
-        .map(|&v| ((v / scale).abs().clamp(0.0, 1.0) * (num_states - 1) as f32) / (num_states - 1) as f32)
+        .map(|&v| {
+            ((v / scale).abs().clamp(0.0, 1.0) * (num_states - 1) as f32) / (num_states - 1) as f32
+        })
         .collect()
 }
 
@@ -200,7 +205,15 @@ pub fn quantize_trellis_single(
     device: &Device,
 ) -> Result<QuantizedTensors> {
     if dtype != QuantDType::I4 {
-        return quantize_simple_packed(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device);
+        return quantize_simple_packed(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            device,
+        );
     }
 
     let (rows, cols) = matrix.shape();
@@ -272,7 +285,15 @@ pub fn quantize_trellis_dual(
     config: TrellisConfig,
 ) -> Result<QuantizedTensors> {
     if dtype != QuantDType::I4 {
-        return quantize_simple_packed(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device);
+        return quantize_simple_packed(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            device,
+        );
     }
 
     let (rows, cols) = matrix.shape();
@@ -313,10 +334,12 @@ pub fn quantize_trellis_dual(
             let offsets0 = normalize_block(&vals0, shared_scale, num_states);
             let offsets1 = normalize_block(&vals1, shared_scale, num_states);
 
-            let (path0, path1) = trellis_dual(&offsets0, &offsets1, LAMBDA, GAMMA, TOP_K, num_states);
+            let (path0, path1) =
+                trellis_dual(&offsets0, &offsets1, LAMBDA, GAMMA, TOP_K, num_states);
 
             for (row_offset, path) in [(0, &path0), (1, &path1)] {
-                let base_idx = pair_idx * 2 * num_blocks * 2 + row_offset * num_blocks * 2 + blk * 2;
+                let base_idx =
+                    pair_idx * 2 * num_blocks * 2 + row_offset * num_blocks * 2 + blk * 2;
                 qweight_data[base_idx] = pack_nibbles(path, 0, 8);
                 qweight_data[base_idx + 1] = pack_nibbles(path, 8, 16);
             }
@@ -326,22 +349,22 @@ pub fn quantize_trellis_dual(
     // Compute redundancy mask if enabled (before moving qweight_data)
     let redundancy_mask = if config.emit_redundancy_mask {
         let mut mask_data = vec![0u8; row_pairs * num_blocks];
-        
+
         for pair_idx in 0..row_pairs {
             for blk in 0..num_blocks {
                 let start = blk * block_size;
                 let end = (start + block_size).min(cols);
                 let block_len = end - start;
-                
+
                 // Extract paths for this block from qweight_data
                 let base_idx0 = pair_idx * 2 * num_blocks * 2 + blk * 2;
                 let base_idx1 = pair_idx * 2 * num_blocks * 2 + num_blocks * 2 + blk * 2;
-                
+
                 let packed0_0 = qweight_data[base_idx0];
                 let packed0_1 = qweight_data[base_idx0 + 1];
                 let packed1_0 = qweight_data[base_idx1];
                 let packed1_1 = qweight_data[base_idx1 + 1];
-                
+
                 // Unpack nibbles and compute mean absolute difference
                 let mut total_diff = 0u32;
                 for i in 0..8.min(block_len) {
@@ -354,15 +377,19 @@ pub fn quantize_trellis_dual(
                     let s1 = ((packed1_1 >> (i * 4)) & 0x0F) as u8;
                     total_diff += (s0 as i16 - s1 as i16).abs() as u32;
                 }
-                
+
                 let mean_diff = (total_diff as f32) / (block_len as f32);
                 if mean_diff <= (config.redundancy_threshold as f32) {
                     mask_data[pair_idx * num_blocks + blk] = 1;
                 }
             }
         }
-        
-        Some(Tensor::from_vec(mask_data, (row_pairs, num_blocks), device)?)
+
+        Some(Tensor::from_vec(
+            mask_data,
+            (row_pairs, num_blocks),
+            device,
+        )?)
     } else {
         None
     };

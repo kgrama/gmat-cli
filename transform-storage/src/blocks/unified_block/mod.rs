@@ -1,15 +1,15 @@
 //! Unified block implementation supporting 1 or 2 rows with const generic ROWS
 
 mod encode_helper;
-mod iteration;
 mod io;
+mod iteration;
 
-use std::marker::PhantomData;
-use half::f16;
-use std::io::{Read, Write, Result};
+use super::configs::{BlockConfig, Config16x4, Config16x8, Config8x4, Config8x8};
 use super::traits::{ElementMask, EncodingStrategy};
-use super::configs::{BlockConfig, Config8x4, Config8x8, Config16x4, Config16x8};
-use crate::block::{Block, EMPTY_SCALE, EncodedBlock, get_packed_nibble, set_packed_nibble};
+use crate::block::{get_packed_nibble, set_packed_nibble, Block, EncodedBlock, EMPTY_SCALE};
+use half::f16;
+use std::io::{Read, Result, Write};
+use std::marker::PhantomData;
 
 pub use encode_helper::EncodeHelper;
 
@@ -17,10 +17,10 @@ pub use encode_helper::EncodeHelper;
 #[derive(Debug, Clone, Copy)]
 pub struct UnifiedBlock<const ROWS: usize, C: BlockConfig> {
     pub scale_log: f16,
-    pub zero_map: [C::Mask; 2],      // Fixed size 2, use [0] for single row
+    pub zero_map: [C::Mask; 2], // Fixed size 2, use [0] for single row
     pub signs: [C::Mask; 2],
     pub octave_shift: [C::Mask; 2],
-    pub magnitudes: [[u8; 16]; 2],   // Fixed size 2
+    pub magnitudes: [[u8; 16]; 2], // Fixed size 2
     _phantom: PhantomData<C>,
 }
 
@@ -62,7 +62,7 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
     /// Encode single row (for ROWS=1)
     pub fn encode_single(values: &[f32]) -> Self {
         let enc = C::do_encode(values);
-        
+
         if enc.zero_map == 0 {
             return Self::new_empty();
         }
@@ -81,7 +81,7 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
                 } else {
                     (offset, false)
                 };
-                
+
                 if needs_shift {
                     octave_shift |= C::Mask::from(1u8) << i;
                 }
@@ -125,12 +125,10 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
         let shared_scale = shared_scale_log.to_f32();
 
         // Encode row 0
-        let (zero_map0, signs0, octave_shift0, magnitudes0) = 
-            Self::encode_row(&enc0, shared_scale);
+        let (zero_map0, signs0, octave_shift0, magnitudes0) = Self::encode_row(&enc0, shared_scale);
 
         // Encode row 1
-        let (zero_map1, signs1, octave_shift1, magnitudes1) = 
-            Self::encode_row(&enc1, shared_scale);
+        let (zero_map1, signs1, octave_shift1, magnitudes1) = Self::encode_row(&enc1, shared_scale);
 
         Self {
             scale_log: shared_scale_log,
@@ -166,7 +164,7 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
             if (enc.zero_map >> i) & 1 == 1 {
                 // Recompute offset relative to shared scale
                 let offset = enc.log_offsets[i] + (enc.scale_log.to_f32() - shared_scale);
-                
+
                 let (stored_offset, needs_shift) = if offset >= shift_threshold {
                     (offset - shift_amount, true)
                 } else {
@@ -318,10 +316,18 @@ impl<C: BlockConfig + EncodeHelper> Block for UnifiedBlock<1, C> {
                 };
 
                 let is_shifted = (octave_shift >> i) & C::Mask::from(1u8) == C::Mask::from(1u8);
-                let actual_offset = if is_shifted { base_offset + shift_amount } else { base_offset };
+                let actual_offset = if is_shifted {
+                    base_offset + shift_amount
+                } else {
+                    base_offset
+                };
 
                 let log2_magnitude = scale_log + actual_offset;
-                let sign = if (signs >> i) & C::Mask::from(1u8) == C::Mask::from(1u8) { 1u8 } else { 0u8 };
+                let sign = if (signs >> i) & C::Mask::from(1u8) == C::Mask::from(1u8) {
+                    1u8
+                } else {
+                    0u8
+                };
                 Some((i, log2_magnitude, sign))
             }
         })

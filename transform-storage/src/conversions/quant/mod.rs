@@ -7,21 +7,24 @@
 //!
 //! All outputs are Candle tensors with proper packing for inference.
 
-mod types;
 mod float_quant;
-mod pack_none;
-mod pack_simple;
 mod pack_awq;
 mod pack_gptq;
+mod pack_none;
+mod pack_simple;
 mod pack_trellis;
+mod types;
 
 #[cfg(test)]
 mod tests;
 
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{DType, Device, Tensor, Result};
+use candle_core::{DType, Device, Result, Tensor};
 
-pub use types::{ActivationStats, PackFormat, QuantDType, QuantParams, QuantizedTensors, StaticSaliency, TrellisConfig};
+pub use types::{
+    ActivationStats, PackFormat, QuantDType, QuantParams, QuantizedTensors, StaticSaliency,
+    TrellisConfig,
+};
 
 /// Quantize a GraphMatrix with specified format and packing.
 ///
@@ -79,24 +82,65 @@ pub fn quantize_with_center(
     let center = log2_center.unwrap_or(computed_center);
 
     match pack_format {
-        PackFormat::None => {
-            pack_none::quantize_unpacked(matrix, dtype, clip_percentile, center, log2_range, nnz, device)
-        }
-        PackFormat::Packed => {
-            pack_simple::quantize_simple_packed(matrix, dtype, clip_percentile, center, log2_range, nnz, device)
-        }
-        PackFormat::Awq => {
-            pack_awq::quantize_awq(matrix, dtype, clip_percentile, center, log2_range, nnz, None, device)
-        }
-        PackFormat::Gptq => {
-            pack_gptq::quantize_gptq(matrix, dtype, clip_percentile, center, log2_range, nnz, None, device)
-        }
-        PackFormat::TrellisSingle => {
-            pack_trellis::quantize_trellis_single(matrix, dtype, clip_percentile, center, log2_range, nnz, None, device)
-        }
-        PackFormat::TrellisDual => {
-            pack_trellis::quantize_trellis_dual(matrix, dtype, clip_percentile, center, log2_range, nnz, None, device, TrellisConfig::default())
-        }
+        PackFormat::None => pack_none::quantize_unpacked(
+            matrix,
+            dtype,
+            clip_percentile,
+            center,
+            log2_range,
+            nnz,
+            device,
+        ),
+        PackFormat::Packed => pack_simple::quantize_simple_packed(
+            matrix,
+            dtype,
+            clip_percentile,
+            center,
+            log2_range,
+            nnz,
+            device,
+        ),
+        PackFormat::Awq => pack_awq::quantize_awq(
+            matrix,
+            dtype,
+            clip_percentile,
+            center,
+            log2_range,
+            nnz,
+            None,
+            device,
+        ),
+        PackFormat::Gptq => pack_gptq::quantize_gptq(
+            matrix,
+            dtype,
+            clip_percentile,
+            center,
+            log2_range,
+            nnz,
+            None,
+            device,
+        ),
+        PackFormat::TrellisSingle => pack_trellis::quantize_trellis_single(
+            matrix,
+            dtype,
+            clip_percentile,
+            center,
+            log2_range,
+            nnz,
+            None,
+            device,
+        ),
+        PackFormat::TrellisDual => pack_trellis::quantize_trellis_dual(
+            matrix,
+            dtype,
+            clip_percentile,
+            center,
+            log2_range,
+            nnz,
+            None,
+            device,
+            TrellisConfig::default(),
+        ),
     }
 }
 
@@ -161,23 +205,66 @@ pub fn quantize_with_activations(
     match pack_format {
         PackFormat::None => {
             // For unpacked, use standard quantization (activation awareness less critical)
-            pack_none::quantize_unpacked(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device)
+            pack_none::quantize_unpacked(
+                matrix,
+                dtype,
+                clip_percentile,
+                log2_center,
+                log2_range,
+                nnz,
+                device,
+            )
         }
-        PackFormat::Packed => {
-            pack_simple::quantize_simple_packed(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device)
-        }
-        PackFormat::Awq => {
-            pack_awq::quantize_awq(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, Some(activation_stats), device)
-        }
-        PackFormat::Gptq => {
-            pack_gptq::quantize_gptq(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, Some(activation_stats), device)
-        }
-        PackFormat::TrellisSingle => {
-            pack_trellis::quantize_trellis_single(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, Some(activation_stats), device)
-        }
-        PackFormat::TrellisDual => {
-            pack_trellis::quantize_trellis_dual(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, Some(activation_stats), device, TrellisConfig::default())
-        }
+        PackFormat::Packed => pack_simple::quantize_simple_packed(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            device,
+        ),
+        PackFormat::Awq => pack_awq::quantize_awq(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            Some(activation_stats),
+            device,
+        ),
+        PackFormat::Gptq => pack_gptq::quantize_gptq(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            Some(activation_stats),
+            device,
+        ),
+        PackFormat::TrellisSingle => pack_trellis::quantize_trellis_single(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            Some(activation_stats),
+            device,
+        ),
+        PackFormat::TrellisDual => pack_trellis::quantize_trellis_dual(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            Some(activation_stats),
+            device,
+            TrellisConfig::default(),
+        ),
     }
 }
 
@@ -226,7 +313,14 @@ pub fn quantize_with_saliency(
 ) -> Result<QuantizedTensors> {
     // Convert saliency to activation stats and delegate
     let act_stats = saliency.to_activation_stats();
-    quantize_with_activations(matrix, &act_stats, dtype, pack_format, clip_percentile, device)
+    quantize_with_activations(
+        matrix,
+        &act_stats,
+        dtype,
+        pack_format,
+        clip_percentile,
+        device,
+    )
 }
 
 fn create_empty_output(

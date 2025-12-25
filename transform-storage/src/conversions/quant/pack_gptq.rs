@@ -9,7 +9,7 @@
 //! Supports activation-aware quantization when ActivationStats are provided.
 
 use crate::graph_matrix::GraphMatrix;
-use candle_core::{Device, Tensor, Result};
+use candle_core::{Device, Result, Tensor};
 use half::f16;
 
 use super::pack_simple::quantize_simple_packed;
@@ -17,7 +17,7 @@ use super::types::{ActivationStats, PackFormat, QuantDType, QuantParams, Quantiz
 
 /// Compute per-group min/max with optional activation-aware importance weighting.
 fn compute_group_minmax(
-    values: &[(usize, f32)],  // (channel_idx, weight_value)
+    values: &[(usize, f32)], // (channel_idx, weight_value)
     clip_percentile: f32,
     activation_stats: Option<&ActivationStats>,
 ) -> (f32, f32) {
@@ -65,9 +65,11 @@ fn compute_group_minmax(
                 let effective_max_importance = f32::exp2(log2_center + effective_half_range);
 
                 // Convert back to weight space using mean activation
-                let mean_act: f32 = values.iter()
+                let mean_act: f32 = values
+                    .iter()
                     .map(|&(ch, _)| act_stats.scale(ch))
-                    .sum::<f32>() / values.len() as f32;
+                    .sum::<f32>()
+                    / values.len() as f32;
 
                 let effective_max_weight = if mean_act > 0.0 {
                     effective_max_importance / mean_act
@@ -142,7 +144,15 @@ pub fn quantize_gptq(
     device: &Device,
 ) -> Result<QuantizedTensors> {
     if dtype != QuantDType::I4 {
-        return quantize_simple_packed(matrix, dtype, clip_percentile, log2_center, log2_range, nnz, device);
+        return quantize_simple_packed(
+            matrix,
+            dtype,
+            clip_percentile,
+            log2_center,
+            log2_range,
+            nnz,
+            device,
+        );
     }
 
     let (rows, cols) = matrix.shape();
@@ -172,7 +182,8 @@ pub fn quantize_gptq(
                 .map(|in_idx| (in_idx, dense[out_idx * in_features + in_idx]))
                 .collect();
 
-            let (min_val, max_val) = compute_group_minmax(&group_vals, clip_percentile, activation_stats);
+            let (min_val, max_val) =
+                compute_group_minmax(&group_vals, clip_percentile, activation_stats);
 
             if min_val == 0.0 && max_val == 0.0 || max_val == min_val {
                 scales_data[out_idx * num_groups + g] = 1.0;
@@ -229,7 +240,8 @@ pub fn quantize_gptq(
     let mut scales_f16 = vec![f16::ZERO; num_groups * out_features];
     for out_idx in 0..out_features {
         for g in 0..num_groups {
-            scales_f16[g * out_features + out_idx] = f16::from_f32(scales_data[out_idx * num_groups + g]);
+            scales_f16[g * out_features + out_idx] =
+                f16::from_f32(scales_data[out_idx * num_groups + g]);
         }
     }
 

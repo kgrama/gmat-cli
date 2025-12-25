@@ -1,10 +1,10 @@
 //! K-Quant block encoding
 
-use half::f16;
-use crate::blocks::AnyBlock;
+use super::super::utils::{fast_exp2, pack_nibble, set_high_bit_5, set_high_bits_6};
 use super::config::*;
 use super::scales::encode_q4k_scales;
-use super::super::utils::{fast_exp2, pack_nibble, set_high_bit_5, set_high_bits_6};
+use crate::blocks::AnyBlock;
+use half::f16;
 
 //=============================================================================
 // LUT-Based Log-Domain Quantization
@@ -50,10 +50,15 @@ fn build_q2k_log2_thresholds(log2_d: f32, log2_scale: f32) -> [f32; 3] {
 
 #[inline]
 fn log2_quantize_2bit(log2_mag: f32, thresholds: &[f32; 3]) -> u8 {
-    if log2_mag < thresholds[0] { 0 }
-    else if log2_mag < thresholds[1] { 1 }
-    else if log2_mag < thresholds[2] { 2 }
-    else { 3 }
+    if log2_mag < thresholds[0] {
+        0
+    } else if log2_mag < thresholds[1] {
+        1
+    } else if log2_mag < thresholds[2] {
+        2
+    } else {
+        3
+    }
 }
 
 //=============================================================================
@@ -112,12 +117,18 @@ pub fn encode_kquant_block(
         match config.quant_bits {
             4 if config.has_min => {
                 let log2_thresholds = build_log2_positive_lut::<16>(log2_ds);
-                let _log2_min_scale = log2_dmin.unwrap() + (mins.unwrap()[g] as f32).max(1.0).log2();
+                let _log2_min_scale =
+                    log2_dmin.unwrap() + (mins.unwrap()[g] as f32).max(1.0).log2();
 
                 for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
                     for (idx, log2_mag, sign) in blk.log_iter() {
-                        let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
-                        let q = if sign == 1 { 0u8 } else { log2_quantize::<16>(log2_mag, &log2_thresholds) };
+                        let elem_idx =
+                            g * config.elements_per_group + blk_idx * gmat_block_size + idx;
+                        let q = if sign == 1 {
+                            0u8
+                        } else {
+                            log2_quantize::<16>(log2_mag, &log2_thresholds)
+                        };
                         pack_nibble(output, config.quants_offset, elem_idx, q);
                     }
                 }
@@ -127,8 +138,13 @@ pub fn encode_kquant_block(
 
                 for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
                     for (idx, log2_mag, sign) in blk.log_iter() {
-                        let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
-                        let q = if sign == 1 { 0u8 } else { log2_quantize::<32>(log2_mag, &log2_thresholds) };
+                        let elem_idx =
+                            g * config.elements_per_group + blk_idx * gmat_block_size + idx;
+                        let q = if sign == 1 {
+                            0u8
+                        } else {
+                            log2_quantize::<32>(log2_mag, &log2_thresholds)
+                        };
                         set_high_bit_5(output, config.high_bits_offset.unwrap(), elem_idx, q);
                         pack_nibble(output, config.quants_offset, elem_idx, q & 0x0F);
                     }
@@ -137,9 +153,14 @@ pub fn encode_kquant_block(
             6 => {
                 for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
                     for (idx, log2_mag, sign) in blk.log_iter() {
-                        let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
+                        let elem_idx =
+                            g * config.elements_per_group + blk_idx * gmat_block_size + idx;
                         let q_mag = fast_exp2(log2_mag - log2_ds).round().clamp(0.0, 31.0);
-                        let q_signed = if sign == 1 { -(q_mag as i8) } else { q_mag as i8 };
+                        let q_signed = if sign == 1 {
+                            -(q_mag as i8)
+                        } else {
+                            q_mag as i8
+                        };
                         let q = (q_signed + 32) as u8;
                         pack_nibble(output, config.quants_offset, elem_idx, q & 0x0F);
                         set_high_bits_6(output, config.high_bits_offset.unwrap(), elem_idx, q);
@@ -152,8 +173,11 @@ pub fn encode_kquant_block(
 
                 for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
                     for (idx, log2_mag, sign) in blk.log_iter() {
-                        let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
-                        let q_mag = fast_exp2(log2_mag - log2_ds).round().clamp(0.0, config.q_max as f32);
+                        let elem_idx =
+                            g * config.elements_per_group + blk_idx * gmat_block_size + idx;
+                        let q_mag = fast_exp2(log2_mag - log2_ds)
+                            .round()
+                            .clamp(0.0, config.q_max as f32);
                         let q = if sign == 1 { 0 } else { q_mag as u8 };
                         pack_nibble(output, config.quants_offset, elem_idx, q);
                     }
@@ -176,7 +200,16 @@ pub fn encode_q4k_block(
     gmat_blocks: &[&AnyBlock],
     gmat_block_size: usize,
 ) {
-    encode_kquant_block(&Q4_K_CONFIG, output, d, Some(dmin), scales, Some(mins), gmat_blocks, gmat_block_size);
+    encode_kquant_block(
+        &Q4_K_CONFIG,
+        output,
+        d,
+        Some(dmin),
+        scales,
+        Some(mins),
+        gmat_blocks,
+        gmat_block_size,
+    );
 }
 
 pub fn encode_q5k_block(
@@ -188,7 +221,16 @@ pub fn encode_q5k_block(
     gmat_blocks: &[&AnyBlock],
     gmat_block_size: usize,
 ) {
-    encode_kquant_block(&Q5_K_CONFIG, output, d, Some(dmin), scales, Some(mins), gmat_blocks, gmat_block_size);
+    encode_kquant_block(
+        &Q5_K_CONFIG,
+        output,
+        d,
+        Some(dmin),
+        scales,
+        Some(mins),
+        gmat_blocks,
+        gmat_block_size,
+    );
 }
 
 pub fn encode_q6k_block(
@@ -199,7 +241,16 @@ pub fn encode_q6k_block(
     gmat_block_size: usize,
 ) {
     let scales_u8: [u8; 16] = scales.map(|s| s as u8);
-    encode_kquant_block(&Q6_K_CONFIG, output, d, None, &scales_u8, None, gmat_blocks, gmat_block_size);
+    encode_kquant_block(
+        &Q6_K_CONFIG,
+        output,
+        d,
+        None,
+        &scales_u8,
+        None,
+        gmat_blocks,
+        gmat_block_size,
+    );
 }
 
 pub fn encode_q2k_block(
@@ -263,7 +314,11 @@ pub fn encode_q3k_block(
 
     for g in 0..16 {
         let scale_abs = scales[g].abs() as f32;
-        let log2_scale = if scale_abs > 0.0 { log2_d + scale_abs.log2() } else { f32::NEG_INFINITY };
+        let log2_scale = if scale_abs > 0.0 {
+            log2_d + scale_abs.log2()
+        } else {
+            f32::NEG_INFINITY
+        };
 
         let group_start = g * blocks_per_group;
         let group_end = (group_start + blocks_per_group).min(gmat_blocks.len());

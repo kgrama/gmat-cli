@@ -48,11 +48,23 @@ impl CsrMatrix {
         row_ptr: Vec<usize>,
         shape: (usize, usize),
     ) -> Self {
-        assert_eq!(values.len(), col_indices.len(), "values and col_indices must have same length");
-        assert_eq!(row_ptr.len(), shape.0 + 1, "row_ptr must have length num_rows + 1");
+        assert_eq!(
+            values.len(),
+            col_indices.len(),
+            "values and col_indices must have same length"
+        );
+        assert_eq!(
+            row_ptr.len(),
+            shape.0 + 1,
+            "row_ptr must have length num_rows + 1"
+        );
         assert_eq!(*row_ptr.first().unwrap(), 0, "row_ptr must start at 0");
-        assert_eq!(*row_ptr.last().unwrap(), values.len(), "row_ptr must end at values.len()");
-        
+        assert_eq!(
+            *row_ptr.last().unwrap(),
+            values.len(),
+            "row_ptr must end at values.len()"
+        );
+
         Self {
             values,
             col_indices,
@@ -76,13 +88,14 @@ impl CsrMatrix {
         }
 
         // Create triplets and sort by (row, col)
-        let mut triplets: Vec<(usize, usize, f32)> = coo.row_indices
+        let mut triplets: Vec<(usize, usize, f32)> = coo
+            .row_indices
             .iter()
             .zip(coo.col_indices.iter())
             .zip(coo.values.iter())
             .map(|((&r, &c), &v)| (r, c, v))
             .collect();
-        
+
         triplets.sort_by_key(|&(r, c, _)| (r, c));
 
         // Build CSR arrays
@@ -156,9 +169,17 @@ impl CooMatrix {
         col_indices: Vec<usize>,
         shape: (usize, usize),
     ) -> Self {
-        assert_eq!(values.len(), row_indices.len(), "values and row_indices must have same length");
-        assert_eq!(values.len(), col_indices.len(), "values and col_indices must have same length");
-        
+        assert_eq!(
+            values.len(),
+            row_indices.len(),
+            "values and row_indices must have same length"
+        );
+        assert_eq!(
+            values.len(),
+            col_indices.len(),
+            "values and col_indices must have same length"
+        );
+
         Self {
             values,
             row_indices,
@@ -198,24 +219,14 @@ mod tests {
 
     #[test]
     fn test_csr_creation() {
-        let csr = CsrMatrix::new(
-            vec![1.0, 2.0, 3.0],
-            vec![0, 2, 1],
-            vec![0, 2, 2, 3],
-            (3, 3),
-        );
+        let csr = CsrMatrix::new(vec![1.0, 2.0, 3.0], vec![0, 2, 1], vec![0, 2, 2, 3], (3, 3));
         assert_eq!(csr.nnz(), 3);
         assert_eq!(csr.shape, (3, 3));
     }
 
     #[test]
     fn test_coo_creation() {
-        let coo = CooMatrix::new(
-            vec![1.0, 2.0, 3.0],
-            vec![0, 0, 2],
-            vec![0, 2, 1],
-            (3, 3),
-        );
+        let coo = CooMatrix::new(vec![1.0, 2.0, 3.0], vec![0, 0, 2], vec![0, 2, 1], (3, 3));
         assert_eq!(coo.nnz(), 3);
         assert_eq!(coo.shape, (3, 3));
     }
@@ -230,7 +241,7 @@ mod tests {
         );
 
         let csr = CsrMatrix::from_coo(coo);
-        
+
         assert_eq!(csr.values, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
         assert_eq!(csr.col_indices, vec![0, 2, 3, 0, 1]);
         assert_eq!(csr.row_ptr, vec![0, 2, 3, 5]);
@@ -247,7 +258,7 @@ mod tests {
         );
 
         let coo = CooMatrix::from_csr(csr);
-        
+
         assert_eq!(coo.values, vec![1.0, 2.0, 3.0, 4.0, 5.0]);
         assert_eq!(coo.row_indices, vec![0, 0, 1, 2, 2]);
         assert_eq!(coo.col_indices, vec![0, 2, 3, 0, 1]);
@@ -256,12 +267,7 @@ mod tests {
 
     #[test]
     fn test_empty_conversion() {
-        let coo = CooMatrix::new(
-            vec![],
-            vec![],
-            vec![],
-            (3, 4),
-        );
+        let coo = CooMatrix::new(vec![], vec![], vec![], (3, 4));
 
         let csr = CsrMatrix::from_coo(coo);
         assert_eq!(csr.nnz(), 0);
@@ -270,16 +276,12 @@ mod tests {
 
     #[test]
     fn test_roundtrip() {
-        let original_coo = CooMatrix::new(
-            vec![1.0, 2.0, 3.0],
-            vec![0, 1, 2],
-            vec![1, 2, 0],
-            (3, 3),
-        );
+        let original_coo =
+            CooMatrix::new(vec![1.0, 2.0, 3.0], vec![0, 1, 2], vec![1, 2, 0], (3, 3));
 
         let csr = CsrMatrix::from_coo(original_coo.clone());
         let roundtrip_coo = CooMatrix::from_csr(csr);
-        
+
         assert_eq!(roundtrip_coo.values, original_coo.values);
         assert_eq!(roundtrip_coo.row_indices, original_coo.row_indices);
         assert_eq!(roundtrip_coo.col_indices, original_coo.col_indices);

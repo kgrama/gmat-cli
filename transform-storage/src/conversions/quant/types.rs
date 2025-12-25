@@ -205,7 +205,11 @@ impl ActivationStats {
             log2.get(channel).copied().unwrap_or(0.0)
         } else {
             let s = self.channel_scales.get(channel).copied().unwrap_or(1.0);
-            if s > 0.0 { s.log2() } else { f32::NEG_INFINITY }
+            if s > 0.0 {
+                s.log2()
+            } else {
+                f32::NEG_INFINITY
+            }
         }
     }
 
@@ -265,10 +269,14 @@ impl StaticSaliency {
     ///
     /// Saliency = upstream × weight (in log domain: add, then exp2)
     pub fn from_chained_scales(upstream_scales: &[f32], weight_col_scales: &[f32]) -> Self {
-        assert_eq!(upstream_scales.len(), weight_col_scales.len(),
-            "Scale vectors must have same length");
+        assert_eq!(
+            upstream_scales.len(),
+            weight_col_scales.len(),
+            "Scale vectors must have same length"
+        );
 
-        let channel_saliency: Vec<f32> = upstream_scales.iter()
+        let channel_saliency: Vec<f32> = upstream_scales
+            .iter()
             .zip(weight_col_scales.iter())
             .map(|(&up, &w)| up * w)
             .collect();
@@ -281,10 +289,14 @@ impl StaticSaliency {
     /// `upstream_log2`: log2 of upstream scales
     /// `weight_log2`: log2 of weight column scales
     pub fn from_chained_log2(upstream_log2: &[f32], weight_log2: &[f32]) -> Self {
-        assert_eq!(upstream_log2.len(), weight_log2.len(),
-            "Scale vectors must have same length");
+        assert_eq!(
+            upstream_log2.len(),
+            weight_log2.len(),
+            "Scale vectors must have same length"
+        );
 
-        let channel_saliency: Vec<f32> = upstream_log2.iter()
+        let channel_saliency: Vec<f32> = upstream_log2
+            .iter()
             .zip(weight_log2.iter())
             .map(|(&up, &w)| f32::exp2(up + w))
             .collect();
@@ -353,7 +365,7 @@ mod tests {
     fn test_trellis_config() {
         let default = TrellisConfig::new();
         assert!(!default.emit_redundancy_mask);
-        
+
         let with_mask = TrellisConfig::with_mask(2);
         assert!(with_mask.emit_redundancy_mask);
         assert_eq!(with_mask.redundancy_threshold, 2);

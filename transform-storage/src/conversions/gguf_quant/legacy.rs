@@ -5,8 +5,11 @@
 
 use half::f16;
 
+use super::utils::{
+    build_log2_thresholds, compute_scale_from_log2_max, log2_group_max, log2_group_stats,
+    log2_quantize,
+};
 use crate::blocks::AnyBlock;
-use super::utils::{log2_group_stats, compute_scale_from_log2_max, log2_quantize, build_log2_thresholds, log2_group_max};
 
 //=============================================================================
 // Configuration
@@ -80,12 +83,9 @@ pub const Q5_1_CONFIG: LegacyConfig = LegacyConfig {
 // Log-Domain Statistics (zero-copy, cache-efficient)
 //=============================================================================
 
-
 //=============================================================================
 // Log-Domain LUT-Based Quantization for Asymmetric Formats
 //=============================================================================
-
-
 
 //=============================================================================
 // Nibble Packing (shared, inlined)
@@ -120,29 +120,25 @@ fn set_low_nibble(out: &mut [u8], low_offset: usize, idx: usize, q: u8) {
 /// Encode a legacy block using config-driven logic.
 /// Uses log-domain statistics with single exp2 per scale computation.
 #[inline]
-pub fn encode_legacy_block(
-    config: &LegacyConfig,
-    gmat_blocks: &[&AnyBlock],
-    out: &mut [u8],
-) {
+pub fn encode_legacy_block(config: &LegacyConfig, gmat_blocks: &[&AnyBlock], out: &mut [u8]) {
     debug_assert!(out.len() >= config.block_bytes);
 
     let (d, min_val, inv_scale) = if config.has_min {
         // Asymmetric: compute min/max from log2 stats (2 exp2 calls)
         let stats = log2_group_stats(gmat_blocks);
-        
+
         let min_val = if stats.neg_count > 0 {
             -f32::exp2(stats.neg_log2_max)
         } else {
             0.0
         };
-        
+
         let max_val = if stats.count > stats.neg_count {
             f32::exp2(stats.log2_max)
         } else {
             0.0
         };
-        
+
         let range = max_val - min_val;
         let scale = range / config.q_max as f32;
         let inv = if scale > 1e-10 { 1.0 / scale } else { 0.0 };
@@ -167,13 +163,27 @@ pub fn encode_legacy_block(
     // Quantize based on bit width (per-element exp2 for GGUF compliance)
     match config.quant_bits {
         8 => encode_8bit(gmat_blocks, block_size, inv_scale, &mut out[2..]),
-        4 if config.high_bits_bytes == 0 => {
-            encode_4bit(gmat_blocks, block_size, inv_scale, min_val, config.q_offset, &mut out[config.header_bytes..])
-        }
+        4 if config.high_bits_bytes == 0 => encode_4bit(
+            gmat_blocks,
+            block_size,
+            inv_scale,
+            min_val,
+            config.q_offset,
+            &mut out[config.header_bytes..],
+        ),
         5 => {
             let high_offset = config.header_bytes;
             let low_offset = high_offset + config.high_bits_bytes;
-            encode_5bit(gmat_blocks, block_size, inv_scale, min_val, config.q_offset, out, high_offset, low_offset)
+            encode_5bit(
+                gmat_blocks,
+                block_size,
+                inv_scale,
+                min_val,
+                config.q_offset,
+                out,
+                high_offset,
+                low_offset,
+            )
         }
         _ => unreachable!(),
     }
@@ -189,8 +199,14 @@ fn encode_8bit(gmat_blocks: &[&AnyBlock], block_size: usize, inv_scale: f32, out
         for (idx, log2_mag, sign) in blk.log_iter() {
             let global_idx = base + idx;
             if global_idx < 32 {
-                let q_mag = super::utils::fast_exp2(log2_mag - log2_scale).round().clamp(0.0, 127.0);
-                let q = if sign == 1 { -(q_mag as i8) } else { q_mag as i8 };
+                let q_mag = super::utils::fast_exp2(log2_mag - log2_scale)
+                    .round()
+                    .clamp(0.0, 127.0);
+                let q = if sign == 1 {
+                    -(q_mag as i8)
+                } else {
+                    q_mag as i8
+                };
                 out[global_idx] = q as u8;
             }
         }
@@ -225,8 +241,14 @@ fn encode_4bit(
             for (idx, log2_mag, sign) in blk.log_iter() {
                 let global_idx = base + idx;
                 if global_idx < 32 {
-                    let q_mag = super::utils::fast_exp2(log2_mag - log2_scale).round().clamp(0.0, 7.0);
-                    let q_signed = if sign == 1 { -(q_mag as i8) } else { q_mag as i8 };
+                    let q_mag = super::utils::fast_exp2(log2_mag - log2_scale)
+                        .round()
+                        .clamp(0.0, 7.0);
+                    let q_signed = if sign == 1 {
+                        -(q_mag as i8)
+                    } else {
+                        q_mag as i8
+                    };
                     let q = (q_signed + offset) as u8;
 
                     // Pack nibble
@@ -305,8 +327,14 @@ fn encode_5bit(
             for (idx, log2_mag, sign) in blk.log_iter() {
                 let global_idx = base + idx;
                 if global_idx < 32 {
-                    let q_mag = super::utils::fast_exp2(log2_mag - log2_scale).round().clamp(0.0, 15.0);
-                    let q_signed = if sign == 1 { -(q_mag as i8) } else { q_mag as i8 };
+                    let q_mag = super::utils::fast_exp2(log2_mag - log2_scale)
+                        .round()
+                        .clamp(0.0, 15.0);
+                    let q_signed = if sign == 1 {
+                        -(q_mag as i8)
+                    } else {
+                        q_mag as i8
+                    };
                     let q = (q_signed + offset) as u8;
 
                     set_high_bit(out, high_offset, global_idx, q);

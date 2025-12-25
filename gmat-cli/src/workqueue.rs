@@ -5,9 +5,9 @@
 //! - Workers: pull from channel, process on rayon pool, send to output channel
 //! - Writer: pulls from output channel, persists to disk
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, Semaphore};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use tokio::sync::{Semaphore, mpsc};
 
 /// Shared pipeline state for coordination and progress tracking.
 pub struct PipelineState {
@@ -80,15 +80,11 @@ where
 
     // Spawn producer
     let producer_state = Arc::clone(&state);
-    let producer_handle = tokio::spawn(async move {
-        producer(work_tx, producer_state).await
-    });
+    let producer_handle = tokio::spawn(async move { producer(work_tx, producer_state).await });
 
     // Spawn writer
     let writer_state = Arc::clone(&state);
-    let writer_handle = tokio::spawn(async move {
-        writer(out_rx, writer_state).await
-    });
+    let writer_handle = tokio::spawn(async move { writer(out_rx, writer_state).await });
 
     // Limit concurrent workers to rayon's thread pool size
     let max_workers = rayon::current_num_threads();
@@ -122,8 +118,12 @@ where
     drop(out_tx);
 
     // Wait for producer and writer
-    producer_handle.await.map_err(|e| anyhow::anyhow!("producer panicked: {}", e))??;
-    writer_handle.await.map_err(|e| anyhow::anyhow!("writer panicked: {}", e))??;
+    producer_handle
+        .await
+        .map_err(|e| anyhow::anyhow!("producer panicked: {}", e))??;
+    writer_handle
+        .await
+        .map_err(|e| anyhow::anyhow!("writer panicked: {}", e))??;
 
     Ok(())
 }
@@ -194,5 +194,4 @@ mod tests {
         assert_eq!(produced, 5);
         assert_eq!(completed, 5);
     }
-
 }

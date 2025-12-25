@@ -73,13 +73,11 @@ mod tests {
         let config = ImportConfig {
             source_format: "safetensors".to_string(),
             block_format: "B16x8".to_string(),
-            tensor_map: vec![
-                TensorMapping {
-                    source: "layer.0.weight".to_string(),
-                    target: "uuid-1234".to_string(),
-                    include: true,
-                },
-            ],
+            tensor_map: vec![TensorMapping {
+                source: "layer.0.weight".to_string(),
+                target: "uuid-1234".to_string(),
+                include: true,
+            }],
             metadata: ModelMetadata {
                 architecture: Some("llama".to_string()),
                 vocab_size: Some(32000),

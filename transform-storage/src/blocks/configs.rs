@@ -24,8 +24,8 @@ impl BlockConfig for Config8x4 {
     const SIZE: usize = 8;
     const MAG_ARRAY_SIZE: usize = 4;
     const MASK_SIZE: usize = 1;
-    const BYTE_SIZE_EMPTY: usize = 1;      // zero_map only
-    const BYTE_SIZE_NON_EMPTY: usize = 9;  // 1+2+1+1+4
+    const BYTE_SIZE_EMPTY: usize = 1; // zero_map only
+    const BYTE_SIZE_NON_EMPTY: usize = 9; // 1+2+1+1+4
 }
 
 /// 8 elements, 8-bit encoding
@@ -38,8 +38,8 @@ impl BlockConfig for Config8x8 {
     const SIZE: usize = 8;
     const MAG_ARRAY_SIZE: usize = 8;
     const MASK_SIZE: usize = 1;
-    const BYTE_SIZE_EMPTY: usize = 1;       // zero_map only
-    const BYTE_SIZE_NON_EMPTY: usize = 13;  // 1+2+1+1+8
+    const BYTE_SIZE_EMPTY: usize = 1; // zero_map only
+    const BYTE_SIZE_NON_EMPTY: usize = 13; // 1+2+1+1+8
 }
 
 /// 16 elements, 4-bit encoding
@@ -52,8 +52,8 @@ impl BlockConfig for Config16x4 {
     const SIZE: usize = 16;
     const MAG_ARRAY_SIZE: usize = 8;
     const MASK_SIZE: usize = 2;
-    const BYTE_SIZE_EMPTY: usize = 2;       // zero_map only
-    const BYTE_SIZE_NON_EMPTY: usize = 16;  // 2+2+2+2+8
+    const BYTE_SIZE_EMPTY: usize = 2; // zero_map only
+    const BYTE_SIZE_NON_EMPTY: usize = 16; // 2+2+2+2+8
 }
 
 /// 16 elements, 8-bit encoding
@@ -66,6 +66,6 @@ impl BlockConfig for Config16x8 {
     const SIZE: usize = 16;
     const MAG_ARRAY_SIZE: usize = 16;
     const MASK_SIZE: usize = 2;
-    const BYTE_SIZE_EMPTY: usize = 2;       // zero_map only
-    const BYTE_SIZE_NON_EMPTY: usize = 24;  // 2+2+2+2+16
+    const BYTE_SIZE_EMPTY: usize = 2; // zero_map only
+    const BYTE_SIZE_NON_EMPTY: usize = 24; // 2+2+2+2+16
 }

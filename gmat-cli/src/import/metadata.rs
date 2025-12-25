@@ -19,13 +19,16 @@ use crate::config::import_config::ModelMetadata;
 pub fn extract_model_metadata(safetensor_files: &[PathBuf]) -> Result<ModelMetadata> {
     // Try to find config.json in the parent directory of the first safetensor file
     if let Some(first_file) = safetensor_files.first()
-        && let Some(parent) = first_file.parent() {
-            let config_path = parent.join("config.json");
-            if config_path.exists() && let Ok(metadata) = extract_from_config_json(&config_path) {
-                println!("Loaded metadata from config.json");
-                return Ok(metadata);
-            }
+        && let Some(parent) = first_file.parent()
+    {
+        let config_path = parent.join("config.json");
+        if config_path.exists()
+            && let Ok(metadata) = extract_from_config_json(&config_path)
+        {
+            println!("Loaded metadata from config.json");
+            return Ok(metadata);
         }
+    }
 
     // Try to extract from safetensor __metadata__ using mmap
     for file_path in safetensor_files {
@@ -71,7 +74,9 @@ fn extract_from_config_json(config_path: &Path) -> Result<ModelMetadata> {
     let get_str = |key: &str| -> Option<String> {
         // model_type should come from top-level
         if key == "model_type" {
-            json.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+            json.get(key)
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
         } else {
             text_cfg
                 .and_then(|cfg| cfg.get(key))
@@ -100,8 +105,7 @@ fn extract_from_config_json(config_path: &Path) -> Result<ModelMetadata> {
         });
 
     // hidden_size with encoder-decoder fallback (d_model)
-    let hidden_size = get_num("hidden_size")
-        .or_else(|| get_num("d_model"));
+    let hidden_size = get_num("hidden_size").or_else(|| get_num("d_model"));
 
     // num_layers with multiple fallbacks
     let num_layers = get_num("num_hidden_layers")

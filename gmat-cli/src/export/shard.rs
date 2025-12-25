@@ -50,7 +50,11 @@ pub struct GgufStreamWriter {
 }
 
 impl GgufStreamWriter {
-    pub fn new(metadata: &serde_json::Value, output_file: &str, max_shard_size: Option<u64>) -> Self {
+    pub fn new(
+        metadata: &serde_json::Value,
+        output_file: &str,
+        max_shard_size: Option<u64>,
+    ) -> Self {
         let model_meta = GgufModelMetadata::from_json(metadata);
         let builder = new_builder_with_metadata(&model_meta);
 
@@ -73,9 +77,11 @@ impl GgufStreamWriter {
 
         // Check if we need to flush current shard (sharded mode only)
         if let Some(max_size) = self.max_shard_size
-            && self.tensors_in_shard > 0 && self.current_shard_size + tensor_size > max_size {
-                self.flush_shard()?;
-            }
+            && self.tensors_in_shard > 0
+            && self.current_shard_size + tensor_size > max_size
+        {
+            self.flush_shard()?;
+        }
 
         // Add tensor to builder
         let (rows, cols) = tensor.shape;
@@ -99,9 +105,12 @@ impl GgufStreamWriter {
         let shard_file = self.shard_filename();
         println!("\nWriting shard: {}", shard_file.display());
 
-        let result = std::mem::replace(&mut self.builder, new_builder_with_metadata(&self.model_meta))
-            .build_to_file(&shard_file)
-            .map_err(|e| anyhow::anyhow!("Failed to write shard {}: {}", self.shard_index, e))?;
+        let result = std::mem::replace(
+            &mut self.builder,
+            new_builder_with_metadata(&self.model_meta),
+        )
+        .build_to_file(&shard_file)
+        .map_err(|e| anyhow::anyhow!("Failed to write shard {}: {}", self.shard_index, e))?;
 
         self.total_bytes += result.total_bytes_written as u64;
         self.shard_index += 1;
@@ -113,7 +122,10 @@ impl GgufStreamWriter {
 
     fn shard_filename(&self) -> PathBuf {
         let output_path = Path::new(&self.output_file);
-        let stem = output_path.file_stem().and_then(|s| s.to_str()).unwrap_or("model");
+        let stem = output_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("model");
         let parent = output_path.parent().unwrap_or(Path::new("."));
         parent.join(format!("{}-{:05}.gguf", stem, self.shard_index + 1))
     }
@@ -147,7 +159,8 @@ impl GgufStreamWriter {
         } else {
             // Single file mode
             println!("\nWriting: {}", self.output_file);
-            let result = self.builder
+            let result = self
+                .builder
                 .build_to_file(&self.output_file)
                 .map_err(|e| anyhow::anyhow!("Failed to write GGUF: {}", e))?;
 
@@ -207,7 +220,10 @@ impl GgufModelMetadata {
                 .or_else(|| metadata.get("architecture"))
                 .and_then(|v| v.as_str())
                 .map(normalize_architecture),
-            name: metadata.get("name").and_then(|v| v.as_str()).map(String::from),
+            name: metadata
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             vocab_size: get_num("vocab_size"),
             hidden_size: get_num("hidden_size").or_else(|| get_num("d_model")),
             num_layers: get_num("num_hidden_layers")
@@ -217,12 +233,10 @@ impl GgufModelMetadata {
                 .or_else(|| get_num("num_heads"))
                 .or_else(|| get_num("n_head")),
             num_key_value_heads: get_num("num_key_value_heads"),
-            intermediate_size: get_num("intermediate_size")
-                .or_else(|| get_num("d_ff")),
+            intermediate_size: get_num("intermediate_size").or_else(|| get_num("d_ff")),
             max_position_embeddings: get_num("max_position_embeddings")
                 .or_else(|| get_num("n_positions")),
-            rms_norm_eps: get_f64("rms_norm_eps")
-                .or_else(|| get_f64("layer_norm_epsilon")),
+            rms_norm_eps: get_f64("rms_norm_eps").or_else(|| get_f64("layer_norm_epsilon")),
             rope_theta: get_f64("rope_theta"),
         }
     }
@@ -248,38 +262,66 @@ fn new_builder_with_metadata(model_meta: &GgufModelMetadata) -> GGUFBuilder {
     let arch = model_meta.architecture.as_deref().unwrap_or("llama");
 
     // General metadata
-    builder = builder.add_metadata("general.architecture", MetadataValue::String(arch.to_string()));
+    builder = builder.add_metadata(
+        "general.architecture",
+        MetadataValue::String(arch.to_string()),
+    );
     if let Some(name) = &model_meta.name {
         builder = builder.add_metadata("general.name", MetadataValue::String(name.clone()));
     }
 
     // Architecture-specific metadata (prefixed with arch name)
     if let Some(v) = model_meta.vocab_size {
-        builder = builder.add_metadata(format!("{}.vocab_size", arch), MetadataValue::U32(v as u32));
+        builder =
+            builder.add_metadata(format!("{}.vocab_size", arch), MetadataValue::U32(v as u32));
     }
     if let Some(v) = model_meta.hidden_size {
-        builder = builder.add_metadata(format!("{}.embedding_length", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(
+            format!("{}.embedding_length", arch),
+            MetadataValue::U32(v as u32),
+        );
     }
     if let Some(v) = model_meta.num_layers {
-        builder = builder.add_metadata(format!("{}.block_count", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(
+            format!("{}.block_count", arch),
+            MetadataValue::U32(v as u32),
+        );
     }
     if let Some(v) = model_meta.num_attention_heads {
-        builder = builder.add_metadata(format!("{}.attention.head_count", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(
+            format!("{}.attention.head_count", arch),
+            MetadataValue::U32(v as u32),
+        );
     }
     if let Some(v) = model_meta.num_key_value_heads {
-        builder = builder.add_metadata(format!("{}.attention.head_count_kv", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(
+            format!("{}.attention.head_count_kv", arch),
+            MetadataValue::U32(v as u32),
+        );
     }
     if let Some(v) = model_meta.intermediate_size {
-        builder = builder.add_metadata(format!("{}.feed_forward_length", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(
+            format!("{}.feed_forward_length", arch),
+            MetadataValue::U32(v as u32),
+        );
     }
     if let Some(v) = model_meta.max_position_embeddings {
-        builder = builder.add_metadata(format!("{}.context_length", arch), MetadataValue::U32(v as u32));
+        builder = builder.add_metadata(
+            format!("{}.context_length", arch),
+            MetadataValue::U32(v as u32),
+        );
     }
     if let Some(v) = model_meta.rms_norm_eps {
-        builder = builder.add_metadata(format!("{}.attention.layer_norm_rms_epsilon", arch), MetadataValue::F32(v as f32));
+        builder = builder.add_metadata(
+            format!("{}.attention.layer_norm_rms_epsilon", arch),
+            MetadataValue::F32(v as f32),
+        );
     }
     if let Some(v) = model_meta.rope_theta {
-        builder = builder.add_metadata(format!("{}.rope.freq_base", arch), MetadataValue::F32(v as f32));
+        builder = builder.add_metadata(
+            format!("{}.rope.freq_base", arch),
+            MetadataValue::F32(v as f32),
+        );
     }
 
     builder

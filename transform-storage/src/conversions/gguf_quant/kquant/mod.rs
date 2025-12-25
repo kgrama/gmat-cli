@@ -4,9 +4,9 @@
 //! Each group has per-group scales enabling finer quantization control.
 
 mod config;
-mod scales;
 mod encode;
+mod scales;
 
 pub use config::*;
-pub use scales::*;
 pub use encode::*;
+pub use scales::*;
