@@ -59,18 +59,18 @@ pub const IQ4_NL_QUANTS: [i8; 16] = [
 pub const IQ4_NL_LOG2_THRESHOLDS: [f32; 15] = [
     6.8522818, // log2((127 + 104) / 2) = log2(115.5)
     6.5466433, // log2((104 + 83) / 2) = log2(93.5)
-    6.2094533, // log2((83 + 65) / 2) = log2(74.0)
-    5.8329900, // log2((65 + 49) / 2) = log2(57.0)
+    6.209_453, // log2((83 + 65) / 2) = log2(74.0)
+    5.832_99, // log2((65 + 49) / 2) = log2(57.0)
     5.3923174, // log2((49 + 35) / 2) = log2(42.0)
-    4.8329900, // log2((35 + 22) / 2) = log2(28.5)
+    4.832_99, // log2((35 + 22) / 2) = log2(28.5)
     4.0,       // log2((22 + 10) / 2) = log2(16.0)
     2.4594316, // log2((10 + 1) / 2) = log2(5.5)
-    2.8073549, // log2((1 + 13) / 2) = log2(7.0)
+    2.807_355, // log2((1 + 13) / 2) = log2(7.0)
     4.2479275, // log2((13 + 25) / 2) = log2(19.0)
     4.9772799, // log2((25 + 38) / 2) = log2(31.5)
-    5.5076081, // log2((38 + 53) / 2) = log2(45.5)
+    5.507_608, // log2((38 + 53) / 2) = log2(45.5)
     5.9307373, // log2((53 + 69) / 2) = log2(61.0)
-    6.3038369, // log2((69 + 89) / 2) = log2(79.0)
+    6.303_837, // log2((69 + 89) / 2) = log2(79.0)
     6.6582115, // log2((89 + 113) / 2) = log2(101.0)
 ];
 
@@ -154,7 +154,7 @@ fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
     if normalized > 2.4594316 {
         // THRESHOLDS[7] - root split
         // Indices 0-7 (higher magnitudes)
-        if normalized > 5.8329900 {
+        if normalized > 5.832_99 {
             // THRESHOLDS[3]
             // Indices 0-3
             if normalized > 6.5466433 {
@@ -167,7 +167,7 @@ fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
                 } // THRESHOLDS[0]
             } else {
                 // Indices 2-3
-                if normalized > 6.2094533 {
+                if normalized > 6.209_453 {
                     2
                 } else {
                     3
@@ -175,7 +175,7 @@ fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
             }
         } else {
             // Indices 4-7
-            if normalized > 4.8329900 {
+            if normalized > 4.832_99 {
                 // THRESHOLDS[5]
                 // Indices 4-5
                 if normalized > 5.3923174 {
@@ -194,13 +194,13 @@ fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
         }
     } else {
         // Indices 8-15 (lower magnitudes)
-        if normalized > 5.5076081 {
+        if normalized > 5.507_608 {
             // THRESHOLDS[11]
             // Indices 8-11
             if normalized > 4.2479275 {
                 // THRESHOLDS[9]
                 // Indices 8-9
-                if normalized > 2.8073549 {
+                if normalized > 2.807_355 {
                     8
                 } else {
                     9
@@ -215,7 +215,7 @@ fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
             }
         } else {
             // Indices 12-15
-            if normalized > 6.3038369 {
+            if normalized > 6.303_837 {
                 // THRESHOLDS[13]
                 // Indices 12-13
                 if normalized > 5.9307373 {

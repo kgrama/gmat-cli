@@ -370,12 +370,12 @@ pub fn quantize_trellis_dual(
                 for i in 0..8.min(block_len) {
                     let s0 = ((packed0_0 >> (i * 4)) & 0x0F) as u8;
                     let s1 = ((packed1_0 >> (i * 4)) & 0x0F) as u8;
-                    total_diff += (s0 as i16 - s1 as i16).abs() as u32;
+                    total_diff += (s0 as i16 - s1 as i16).unsigned_abs() as u32;
                 }
                 for i in 0..(block_len.saturating_sub(8)) {
                     let s0 = ((packed0_1 >> (i * 4)) & 0x0F) as u8;
                     let s1 = ((packed1_1 >> (i * 4)) & 0x0F) as u8;
-                    total_diff += (s0 as i16 - s1 as i16).abs() as u32;
+                    total_diff += (s0 as i16 - s1 as i16).unsigned_abs() as u32;
                 }
 
                 let mean_diff = (total_diff as f32) / (block_len as f32);

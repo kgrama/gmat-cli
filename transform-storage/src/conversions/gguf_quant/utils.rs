@@ -125,9 +125,9 @@ pub fn select_quant_with_fallback(cols: usize, target: GgufQuantType) -> GgufQua
         // K-quants and I-quants require 256 alignment
         Q2_K | Q3_K_S | Q3_K_M | Q3_K_L | Q4_K_S | Q4_K_M | Q5_K_S | Q5_K_M | Q6_K | IQ1_S
         | IQ1_M | IQ2_XXS | IQ2_XS | IQ2_S | IQ3_XXS | IQ3_S | IQ4_XS | IQ4_NL => {
-            if cols % 256 == 0 {
+            if cols.is_multiple_of(256) {
                 target
-            } else if cols % 32 == 0 {
+            } else if cols.is_multiple_of(32) {
                 Q8_0 // Fall back to legacy format
             } else {
                 panic!("tensor cols must be multiple of 32")
@@ -135,7 +135,7 @@ pub fn select_quant_with_fallback(cols: usize, target: GgufQuantType) -> GgufQua
         }
         // Legacy formats require 32 alignment
         Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0 => {
-            if cols % 32 == 0 {
+            if cols.is_multiple_of(32) {
                 target
             } else {
                 panic!("tensor cols must be multiple of 32")
