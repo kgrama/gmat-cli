@@ -340,4 +340,42 @@ impl AnyBlock {
     pub fn log_iter(&self) -> Box<dyn Iterator<Item = (usize, f32, u8)> + '_> {
         self.log_row_iter(0)
     }
+
+    /// Get raw e1m7 magnitude data for LUT-based quantization.
+    /// Returns (magnitudes, shift_map, signs, scale_log) for direct LUT indexing.
+    /// 
+    /// For each non-zero element at index i:
+    /// - lut_index = magnitudes[i] + (256 if shift_map bit i is set)
+    /// - sign_bit = (signs >> i) & 1
+    /// - Base offset for LUT = scale_log - d.log2()
+    ///
+    /// Only available for 8-bit encodings. Returns None for 4-bit encodings.
+    /// For DualRow variants, returns row 0 data.
+    pub fn raw_e1m7_data(&self) -> Option<(&[u8], u16, u16, f32)> {
+        match self {
+            // 8-bit variants - supported
+            Self::B8x8(b) => {
+                let shift_map: u64 = b.octave_shift[0].into();
+                let signs: u64 = b.signs[0].into();
+                Some((&b.magnitudes[0][..8], shift_map as u16, signs as u16, b.scale_log.to_f32()))
+            },
+            Self::B16x8(b) => {
+                let shift_map: u64 = b.octave_shift[0].into();
+                let signs: u64 = b.signs[0].into();
+                Some((&b.magnitudes[0][..16], shift_map as u16, signs as u16, b.scale_log.to_f32()))
+            },
+            Self::DualRow8x8(b) => {
+                let shift_map: u64 = b.octave_shift[0].into();
+                let signs: u64 = b.signs[0].into();
+                Some((&b.magnitudes[0][..8], shift_map as u16, signs as u16, b.scale_log.to_f32()))
+            },
+            Self::DualRow16x8(b) => {
+                let shift_map: u64 = b.octave_shift[0].into();
+                let signs: u64 = b.signs[0].into();
+                Some((&b.magnitudes[0][..16], shift_map as u16, signs as u16, b.scale_log.to_f32()))
+            },
+            // 4-bit variants - not supported
+            _ => None,
+        }
+    }
 }

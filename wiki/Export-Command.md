@@ -75,10 +75,17 @@ gmat export --model ./model.gmat --config export_config.json --output model.gguf
 
 ### I-Quantization
 
-| Type | Description |
-|------|-------------|
-| `iq4_xs` | Importance-weighted 4-bit extra-small |
-| `iq4_nl` | Importance-weighted 4-bit non-linear |
+| Type | Bits/Weight | Description | Status |
+|------|-------------|-------------|--------|
+| `iq4_xs` | ~4.25 | Importance-weighted 4-bit with group scales | ✅ Implemented |
+| `iq4_nl` | ~4.0 | Importance-weighted 4-bit non-linear (LUT optimized) | ✅ Implemented |
+| `iq3_xxs` | ~3.0 | 3-bit extra-extra-small | ❌ Not yet |
+| `iq3_s` | ~3.4 | 3-bit small | ❌ Not yet |
+| `iq2_xxs` | ~2.0 | 2-bit extra-extra-small | ❌ Not yet |
+| `iq2_xs` | ~2.3 | 2-bit extra-small | ❌ Not yet |
+| `iq2_s` | ~2.5 | 2-bit small | ❌ Not yet |
+| `iq1_s` | ~1.5 | 1-bit small (extreme compression) | ❌ Not yet |
+| `iq1_m` | ~1.75 | 1-bit medium | ❌ Not yet |
 
 ## Automatic Quantization Recommendations
 

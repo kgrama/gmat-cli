@@ -127,11 +127,113 @@ fn find_nearest_iq4nl_log2(log2_mag: f32, log2_scale: f32) -> u8 {
     lo as u8
 }
 
+/// Fast IQ4_NL index lookup using unrolled decision tree.
+/// Replaces binary search with fixed 4-comparison decision tree.
+/// 
+/// # Performance
+/// - Guaranteed 4 comparisons (vs ~3.9 average for binary search)
+/// - Better branch prediction due to fixed structure
+/// - No loop overhead
+/// 
+/// # Arguments
+/// - `log2_mag`: log2 of absolute value
+/// - `log2_scale`: log2 of scale factor
+/// 
+/// # Returns
+/// Index (0-15) into IQ4_NL_QUANTS lookup table
+#[inline(always)]
+fn find_iq4nl_index_fast(log2_mag: f32, log2_scale: f32) -> u8 {
+    let normalized = log2_mag - log2_scale;
+    
+    // Balanced decision tree: 16 outcomes, 4 levels, 4 comparisons max
+    // Thresholds from IQ4_NL_LOG2_THRESHOLDS array
+    if normalized > 2.4594316 {  // THRESHOLDS[7] - root split
+        // Indices 0-7 (higher magnitudes)
+        if normalized > 5.8329900 {  // THRESHOLDS[3]
+            // Indices 0-3
+            if normalized > 6.5466433 {  // THRESHOLDS[1]
+                // Indices 0-1
+                if normalized > 6.8522818 { 0 } else { 1 }  // THRESHOLDS[0]
+            } else {
+                // Indices 2-3
+                if normalized > 6.2094533 { 2 } else { 3 }  // THRESHOLDS[2]
+            }
+        } else {
+            // Indices 4-7
+            if normalized > 4.8329900 {  // THRESHOLDS[5]
+                // Indices 4-5
+                if normalized > 5.3923174 { 4 } else { 5 }  // THRESHOLDS[4]
+            } else {
+                // Indices 6-7
+                if normalized > 4.0 { 6 } else { 7 }  // THRESHOLDS[6]
+            }
+        }
+    } else {
+        // Indices 8-15 (lower magnitudes)
+        if normalized > 5.5076081 {  // THRESHOLDS[11]
+            // Indices 8-11
+            if normalized > 4.2479275 {  // THRESHOLDS[9]
+                // Indices 8-9
+                if normalized > 2.8073549 { 8 } else { 9 }  // THRESHOLDS[8]
+            } else {
+                // Indices 10-11
+                if normalized > 4.9772799 { 10 } else { 11 }  // THRESHOLDS[10]
+            }
+        } else {
+            // Indices 12-15
+            if normalized > 6.3038369 {  // THRESHOLDS[13]
+                // Indices 12-13
+                if normalized > 5.9307373 { 12 } else { 13 }  // THRESHOLDS[12]
+            } else {
+                // Indices 14-15
+                if normalized > 6.6582115 { 14 } else { 15 }  // THRESHOLDS[14]
+            }
+        }
+    }
+}
+
 /// Dequantize a single IQ4_NL value
 #[inline]
 #[allow(dead_code)] // For validation/debugging
 pub fn dequantize_iq4_nl(d: f16, q: u8) -> f32 {
     f32::from(d) * (IQ4_NL_QUANTS[q as usize] as f32)
+}
+
+//=============================================================================
+// E1M7 to IQ4_NL LUT Cache
+//=============================================================================
+
+/// Cached LUT for e1m7 encoded values to IQ4_NL indices.
+/// 512 entries: [0..255] non-shifted, [256..511] shifted by +2.0 octaves.
+pub type Iq4nlE1m7Lut = [u8; 512];
+
+/// Build LUT mapping e1m7 encoded bytes to IQ4_NL indices.
+/// 
+/// # Arguments
+/// - `base_offset`: block.scale_log - d.log2() (shared across block)
+/// 
+/// The LUT maps raw e1m7 byte values directly to IQ4_NL indices,
+/// avoiding per-element log2 arithmetic.
+#[inline]
+pub fn build_iq4nl_lut_e1m7(base_offset: f32) -> Iq4nlE1m7Lut {
+    let mut lut = [0u8; 512];
+    
+    for raw in 0..256u16 {
+        // Decode e1m7: e = raw >> 7, m = (raw & 0x7F) / 128.0, offset = e + m
+        let e = (raw >> 7) as f32;
+        let m = (raw & 0x7F) as f32 / 128.0;
+        let log2_offset = e + m;
+        
+        // Non-shifted entry
+        let normalized = base_offset + log2_offset;
+        lut[raw as usize] = find_iq4nl_index_fast(normalized, 0.0);
+        
+        // Shifted entry (+2.0 octaves from shift_map bit)
+        let normalized_shifted = base_offset + log2_offset + 2.0;
+        lut[256 + raw as usize] = find_iq4nl_index_fast(normalized_shifted, 0.0);
+    }
+    
+    lut
 }
 
 //=============================================================================
@@ -217,6 +319,10 @@ pub fn encode_iquant_block(
     // Clear quants section
     output[config.quants_offset..config.block_bytes].fill(0);
 
+    // LUT cache for IQ4_NL optimization (8-bit GMAT blocks only)
+    let mut cached_base_offset: Option<f32> = None;
+    let mut cached_lut: Option<Iq4nlE1m7Lut> = None;
+
     // Quantize each group
     for g in 0..config.num_groups {
         let effective_scale = if config.has_group_scales {
@@ -236,6 +342,38 @@ pub fn encode_iquant_block(
         let group_end = (group_start + blocks_per_grp).min(gmat_blocks.len());
 
         for (blk_idx, blk) in gmat_blocks[group_start..group_end].iter().enumerate() {
+            // Fast path: IQ4_NL with 8-bit GMAT blocks using cached LUT
+            if !config.has_group_scales {
+                if let Some((mags, shift_map, _signs, scale_log)) = blk.raw_e1m7_data() {
+                    // Compute base offset for this block
+                    let base_offset = if d_f32.abs() > 1e-10 {
+                        scale_log - d_f32.log2()
+                    } else {
+                        scale_log
+                    };
+
+                    // Build/cache LUT if base_offset changed
+                    let lut = if cached_base_offset != Some(base_offset) {
+                        let new_lut = build_iq4nl_lut_e1m7(base_offset);
+                        cached_base_offset = Some(base_offset);
+                        cached_lut = Some(new_lut);
+                        cached_lut.as_ref().unwrap()
+                    } else {
+                        cached_lut.as_ref().unwrap()
+                    };
+
+                    // Direct LUT lookup for all elements
+                    for idx in 0..gmat_block_size {
+                        let lut_idx = mags[idx] as usize + if (shift_map >> idx) & 1 != 0 { 256 } else { 0 };
+                        let q = lut[lut_idx];
+                        let elem_idx = g * config.elements_per_group + blk_idx * gmat_block_size + idx;
+                        pack_nibble(output, config.quants_offset, elem_idx, q);
+                    }
+                    continue; // Skip fallback path
+                }
+            }
+
+            // Fallback path: use log_iter for 4-bit blocks or when raw data unavailable
             for (idx, log2_mag, sign) in blk.log_iter() {
                 // Use log2 domain binary search - no exp2 calls in inner loop
                 let q = if sign == 1 {

@@ -133,9 +133,46 @@ gmat export --model ./output/model.gmat --generate-config
 gmat export --model ./output/model.gmat --config export_config.json -o model.gguf
 ```
 
+## Supported Model Types
+
+GMAT handles metadata extraction from various HuggingFace model architectures:
+
+### Text Generation (LLMs)
+
+| Architecture | Models | Config Type |
+|--------------|--------|-------------|
+| **Llama** | Llama 2/3, Mistral, Mixtral | Flat |
+| **Qwen** | Qwen, Qwen2 | Flat |
+| **Phi** | Phi-2, Phi-3, Phi-3.5 | Flat |
+| **Gemma** | Gemma, Gemma 2 | Flat |
+| **DeepSeek** | DeepSeek, DeepSeek-V2 | Flat/Nested |
+
+### Vision-Language Models (VLMs)
+
+| Architecture | Models | Config Type |
+|--------------|--------|-------------|
+| **LLaVA** | LLaVA 1.5/1.6 | `text_config` |
+| **Qwen-VL** | Qwen-VL, Qwen2-VL | Flat |
+| **Kimi-VL** | Kimi-VL (MoE) | `text_config` |
+| **InternVL** | InternVL2 | `llm_config` |
+| **DeepSeek-VL** | DeepSeek-VL2 | `language_config` |
+| **Phi-Vision** | Phi-3.5-Vision | Flat |
+
+### Encoder-Decoder / TTS / ASR
+
+| Architecture | Models | Config Type |
+|--------------|--------|-------------|
+| **T5** | T5, Flan-T5 | `d_model`, `d_ff` |
+| **BART** | BART, mBART | `d_model` |
+| **Whisper** | Whisper | `d_model`, `decoder_layers` |
+| **SpeechT5** | SpeechT5 | Flat |
+| **MMS-TTS** | MMS-TTS | Flat |
+
+GMAT automatically detects nested config structures (`text_config`, `language_config`, `llm_config`) and extracts the correct metadata for both import and GGUF export.
+
 ## Documentation
 
-- [Installation](Installation.md) - Build and install
+- [Installation](Installation.md) - Build and install (includes system requirements)
 - [Import Command](Import-Command.md) - SafeTensors to GMAT conversion
 - [Export Command](Export-Command.md) - GMAT to GGUF with quantization
 - [Configuration Files](Configuration-Files.md) - Config file reference

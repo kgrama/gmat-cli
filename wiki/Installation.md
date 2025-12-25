@@ -2,6 +2,33 @@
 
 GMAT-CLI is a pure CPU tool—no GPU, CUDA, or special drivers required. It runs on any machine with a Rust toolchain.
 
+## System Requirements
+
+### Minimum
+
+| Component | Requirement |
+|-----------|-------------|
+| **CPU** | 4 cores (x86_64 or ARM64) |
+| **RAM** | 8 GB |
+| **Storage** | 2× model size (source + GMAT output) |
+| **OS** | Linux, macOS, Windows (WSL2) |
+
+### Recommended (for 70B+ models)
+
+| Component | Requirement |
+|-----------|-------------|
+| **CPU** | 8+ cores |
+| **RAM** | 32 GB |
+| **Storage** | NVMe SSD, 3× model size |
+| **OS** | Linux (best I/O performance) |
+
+### Notes
+
+- **Memory usage is bounded**: GMAT uses streaming pipelines, so RAM requirements don't scale linearly with model size
+- **CPU cores matter**: Parallel processing via Rayon scales with available cores
+- **Storage I/O**: NVMe recommended for large models; HDD works but slower
+- **No GPU required**: All operations run on CPU
+
 ## Prerequisites
 
 - Rust toolchain (1.70 or later recommended)
