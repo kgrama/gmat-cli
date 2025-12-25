@@ -3,11 +3,11 @@
     "block_format": "B8x8",
     "metadata": {
       "architecture": "kimi_vl",
-      "hidden_size": null,
-      "intermediate_size": null,
-      "max_position_embeddings": null,
-      "num_attention_heads": null,
-      "num_layers": null,
+      "hidden_size": 2048,
+      "intermediate_size": 11264,
+      "max_position_embeddings": 131072,
+      "num_attention_heads": 16,
+      "num_layers": 27,
       "vocab_size": 163840
     },
     "source_format": "safetensors",
