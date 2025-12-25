@@ -133,9 +133,10 @@ use crate::common::{load_config, load_gmat_model};
 use crate::config::export_config::{ExportConfig, QuantizationConfig, TensorExportMapping};
 
 use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
-use util::{num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name};
+use util::{num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name, ImportanceThresholds};
 
 /// Tensor analysis result for config generation.
+#[allow(dead_code)]
 struct TensorAnalysis {
     source_name: String,
     uuid: String,
@@ -172,14 +173,20 @@ enum QuantizeEntry {
 fn analyze_model_tensors(
     tensor_entries: Vec<(&String, &serde_json::Value)>,
     tensors_dir: &std::path::Path,
+    thresholds: &ImportanceThresholds,
 ) -> Vec<TensorAnalysis> {
-    tensor_entries
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let total = tensor_entries.len();
+    let processed = AtomicUsize::new(0);
+
+    let results: Vec<TensorAnalysis> = tensor_entries
         .par_iter()
         .filter_map(|(source_name, json_value)| {
             let entry = TensorEntry::from_json(json_value)?;
 
-            // Get the primary UUID and path for analysis
-            let (uuid, tensor_path, shape) = match &entry {
+            // Get UUID, path, and shape info - load matrix once for both shape and importance
+            let (uuid, matrix, shape) = match &entry {
                 TensorEntry::Simple { uuid } => {
                     let path = tensors_dir.join(format!("{}.gmat", uuid));
                     if !path.exists() {
@@ -188,7 +195,7 @@ fn analyze_model_tensors(
                     }
                     let matrix = GraphMatrix::load(&path).ok()?;
                     let shape = matrix.shape();
-                    (uuid.clone(), path, shape)
+                    (uuid.clone(), matrix, shape)
                 }
                 TensorEntry::NdPlanes { plane_uuids, matrix_shape, original_shape, .. } => {
                     // For N-D tensors, analyze first plane and compute total size
@@ -198,19 +205,27 @@ fn analyze_model_tensors(
                         eprintln!("Warning: missing tensor plane: {}", path.display());
                         return None;
                     }
+                    let matrix = GraphMatrix::load(&path).ok()?;
                     // Use original shape's last 2 dims times num_planes for total size estimation
                     let total_elements: usize = original_shape.iter().product();
                     let approx_rows = total_elements / matrix_shape.1;
-                    (first_uuid.clone(), path, (approx_rows, matrix_shape.1))
+                    (first_uuid.clone(), matrix, (approx_rows, matrix_shape.1))
                 }
             };
 
-            let matrix = GraphMatrix::load(&tensor_path).ok()?;
             let importance = compute_tensor_importance(&matrix);
             let (rows, cols) = shape;
 
             let gguf_name = safetensor_to_gguf_name(source_name);
-            let quant_type = recommend_quant_type(source_name, importance, rows * cols);
+            let quant_type = recommend_quant_type(source_name, importance, rows * cols, thresholds);
+
+            // Progress update
+            let count = processed.fetch_add(1, Ordering::Relaxed) + 1;
+            if count % 100 == 0 || count == total {
+                eprint!("\rAnalyzed {}/{} tensors...", count, total);
+                use std::io::Write;
+                let _ = std::io::stderr().flush();
+            }
 
             Some(TensorAnalysis {
                 source_name: source_name.to_string(),
@@ -222,7 +237,84 @@ fn analyze_model_tensors(
                 quant_type,
             })
         })
-        .collect()
+        .collect();
+
+    eprintln!(); // New line after progress
+    results
+}
+
+/// Export tensor statistics.
+#[derive(Debug, Default)]
+struct ExportTensorStats {
+    total_tensors: usize,
+    total_elements: u64,
+    min_elements: u64,
+    max_elements: u64,
+    avg_importance: f32,
+    min_importance: f32,
+    max_importance: f32,
+    quant_type_counts: HashMap<String, usize>,
+}
+
+impl ExportTensorStats {
+    fn from_analyses(analyses: &[TensorAnalysis]) -> Self {
+        let mut stats = ExportTensorStats::default();
+
+        if analyses.is_empty() {
+            return stats;
+        }
+
+        stats.total_tensors = analyses.len();
+        stats.min_importance = f32::MAX;
+        stats.max_importance = f32::MIN;
+
+        let mut total_importance = 0.0f32;
+
+        for analysis in analyses {
+            let elements = (analysis.rows * analysis.cols) as u64;
+            stats.total_elements += elements;
+
+            if stats.min_elements == 0 || elements < stats.min_elements {
+                stats.min_elements = elements;
+            }
+            if elements > stats.max_elements {
+                stats.max_elements = elements;
+            }
+
+            total_importance += analysis.importance;
+            if analysis.importance < stats.min_importance {
+                stats.min_importance = analysis.importance;
+            }
+            if analysis.importance > stats.max_importance {
+                stats.max_importance = analysis.importance;
+            }
+
+            *stats.quant_type_counts.entry(analysis.quant_type.clone()).or_insert(0) += 1;
+        }
+
+        stats.avg_importance = total_importance / analyses.len() as f32;
+        stats
+    }
+
+    fn print_summary(&self) {
+        println!("\n=== Export Tensor Statistics ===");
+        println!("Total tensors: {}", self.total_tensors);
+        println!("Total elements: {} ({:.2} B)", self.total_elements, self.total_elements as f64 / 1e9);
+        println!("Elements range: {} - {} ({:.2} M max)", self.min_elements, self.max_elements, self.max_elements as f64 / 1e6);
+
+        println!("\nImportance scores:");
+        println!("  Min: {:.4}", self.min_importance);
+        println!("  Max: {:.4}", self.max_importance);
+        println!("  Avg: {:.4}", self.avg_importance);
+
+        println!("\nQuantization types:");
+        let mut quants: Vec<_> = self.quant_type_counts.iter().collect();
+        quants.sort_by(|a, b| b.1.cmp(a.1));
+        for (qtype, count) in quants {
+            let pct = (*count as f64 / self.total_tensors as f64) * 100.0;
+            println!("  {}: {} ({:.1}%)", qtype, count, pct);
+        }
+    }
 }
 
 /// Build export config from tensor analyses and write to file.
@@ -231,22 +323,16 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
     let mut per_tensor_quant = HashMap::with_capacity(analyses.len());
 
     for analysis in &analyses {
-        println!(
-            "  {} -> {} [{}x{}] imp={:.3} quant={}",
-            analysis.source_name,
-            analysis.gguf_name,
-            analysis.rows,
-            analysis.cols,
-            analysis.importance,
-            analysis.quant_type
-        );
-
         tensor_mappings.push(TensorExportMapping {
             source: analysis.uuid.clone(),
             target: analysis.gguf_name.clone(),
         });
         per_tensor_quant.insert(analysis.uuid.clone(), analysis.quant_type.clone());
     }
+
+    // Print statistics
+    let stats = ExportTensorStats::from_analyses(&analyses);
+    stats.print_summary();
 
     let config = ExportConfig {
         target_format: "gguf".to_string(),
@@ -263,7 +349,7 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
     fs::write("export_config.json", serde_json::to_string_pretty(&config)?)?;
 
     println!(
-        "\nGenerated export_config.json ({} tensors)",
+        "\n=== Generated export_config.json ({} tensors) ===",
         analyses.len()
     );
     println!(
@@ -275,25 +361,57 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
 }
 
 /// Generate an export config template from a GMAT model.
-pub fn generate_config_template(model_path: &str) -> Result<()> {
+///
+/// Uses tokio-rayon for parallel tensor analysis.
+pub fn generate_config_template(model_path: &str, importance_high: f32, importance_medium: f32) -> Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(generate_config_template_async(model_path, importance_high, importance_medium))
+}
+
+/// Async implementation of export config generation.
+async fn generate_config_template_async(model_path: &str, importance_high: f32, importance_medium: f32) -> Result<()> {
+    use std::time::Instant;
+
+    let start_time = Instant::now();
     let (model_dir, metadata) = load_gmat_model(model_path)?;
 
     let tensor_map = metadata["tensor_name_map"]
         .as_object()
         .context("tensor_name_map not found in metadata.json")?;
 
-    println!("Analyzing {} tensors...", tensor_map.len());
+    let thresholds = ImportanceThresholds::new(importance_high, importance_medium);
+    println!("Analyzing {} tensors (thresholds: high={}, medium={})...",
+             tensor_map.len(), thresholds.high, thresholds.medium);
 
     let tensors_dir = model_dir.join("tensors");
 
-    // Collect tensor entries for parallel processing
-    let tensor_entries: Vec<(&String, &serde_json::Value)> = tensor_map.iter().collect();
+    // Collect tensor entries for parallel processing (clone owned data for async)
+    let tensor_entries: Vec<(String, serde_json::Value)> = tensor_map
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
-    // Analyze tensors in parallel
-    let analyses = analyze_model_tensors(tensor_entries, &tensors_dir);
+    // Run CPU-bound tensor analysis on rayon pool
+    let analysis_start = Instant::now();
+    let analyses = tokio_rayon::spawn(move || {
+        let entries_ref: Vec<(&String, &serde_json::Value)> = tensor_entries
+            .iter()
+            .map(|(k, v)| (k, v))
+            .collect();
+        analyze_model_tensors(entries_ref, &tensors_dir, &thresholds)
+    }).await;
+    let analysis_elapsed = analysis_start.elapsed();
 
     // Build and write config
-    build_and_write_config(analyses, model_path)
+    let result = build_and_write_config(analyses, model_path);
+
+    let total_elapsed = start_time.elapsed();
+
+    println!("\n=== Timing ===");
+    println!("Tensor analysis: {:.2}s", analysis_elapsed.as_secs_f64());
+    println!("Total: {:.2}s", total_elapsed.as_secs_f64());
+
+    result
 }
 
 /// Quantize a single tensor job (worker function for pipeline).

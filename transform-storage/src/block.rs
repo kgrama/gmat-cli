@@ -45,6 +45,11 @@ pub trait Block: Sized + Clone {
     /// Get the scale_log value (for log-domain ops)
     fn scale_log(&self) -> f16;
 
+    /// Compute importance as ratio of octave-shifted elements to total non-zero elements.
+    /// Returns (octave_shift_count, nnz) for efficient aggregate computation.
+    /// Higher ratio indicates larger dynamic range / more important values.
+    fn importance_stats(&self) -> (usize, usize);
+
     /// Decode entire block to Vec<f32>
     fn decode_all(&self) -> Vec<f32> {
         (0..Self::SIZE).map(|i| self.decode(i)).collect()

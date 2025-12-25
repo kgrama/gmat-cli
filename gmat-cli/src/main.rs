@@ -58,6 +58,16 @@ enum Commands {
         /// Generate a template config instead of exporting
         #[arg(long)]
         generate_config: bool,
+
+        /// High importance threshold for quant type selection (octave-shift ratio, 0-1).
+        /// Tensors above this threshold get higher quality quantization.
+        #[arg(long, default_value = "0.2")]
+        importance_high: f32,
+
+        /// Medium importance threshold for quant type selection (octave-shift ratio, 0-1).
+        /// Tensors above this threshold get moderately higher quality quantization.
+        #[arg(long, default_value = "0.1")]
+        importance_medium: f32,
     },
 }
 
@@ -83,9 +93,11 @@ fn main() -> anyhow::Result<()> {
             output,
             shard_size,
             generate_config,
+            importance_high,
+            importance_medium,
         } => {
             if generate_config {
-                export::generate_config_template(&model)?;
+                export::generate_config_template(&model, importance_high, importance_medium)?;
             } else {
                 // Convert MB to bytes if provided
                 let shard_bytes = shard_size.map(|mb| mb * 1_000_000);

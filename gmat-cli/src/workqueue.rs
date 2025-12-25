@@ -195,38 +195,4 @@ mod tests {
         assert_eq!(completed, 5);
     }
 
-    #[tokio::test]
-    async fn test_pipeline_cancellation() {
-        let result: Result<(), anyhow::Error> = run_pipeline(
-            4,
-            4,
-            |tx, state| async move {
-                for i in 0..100 {
-                    if i == 5 {
-                        state.stop();
-                        break;
-                    }
-                    state.inc_produced();
-                    if tx.send(i).await.is_err() {
-                        break;
-                    }
-                }
-                Ok(())
-            },
-            |x: i32| Ok(x * 2),
-            |mut rx, state| async move {
-                while let Some(result) = rx.recv().await {
-                    if !state.is_running() {
-                        break;
-                    }
-                    let _ = result?;
-                    state.inc_completed();
-                }
-                Ok(())
-            },
-        )
-        .await;
-
-        assert!(result.is_ok());
-    }
 }

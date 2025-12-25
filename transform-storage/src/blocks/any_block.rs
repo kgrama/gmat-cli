@@ -15,6 +15,7 @@ pub(crate) trait UnifiedBlockOps {
     fn byte_size(&self) -> usize;
     fn has_element_at(&self, row: usize, idx: usize) -> bool;
     fn sign_at(&self, row: usize, idx: usize) -> bool;
+    fn importance_stats(&self) -> (usize, usize);
 }
 
 impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlockOps for UnifiedBlock<ROWS, C> {
@@ -30,6 +31,18 @@ impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlockOps for Unifi
     fn sign_at(&self, row: usize, idx: usize) -> bool {
         let mask: u64 = self.signs[row].into();
         (mask >> idx) & 1 == 1
+    }
+    fn importance_stats(&self) -> (usize, usize) {
+        // Aggregate across all rows
+        let mut total_shifted = 0usize;
+        let mut total_nnz = 0usize;
+        for row in 0..ROWS {
+            let zero_map: u64 = self.zero_map[row].into();
+            let octave_shift: u64 = self.octave_shift[row].into();
+            total_nnz += zero_map.count_ones() as usize;
+            total_shifted += (octave_shift & zero_map).count_ones() as usize;
+        }
+        (total_shifted, total_nnz)
     }
 }
 
@@ -244,6 +257,12 @@ impl AnyBlock {
     /// Get scale log
     pub fn scale_log(&self) -> f16 {
         self.inner().scale_log()
+    }
+
+    /// Compute importance stats: (octave_shift_count, nnz)
+    /// Returns ratio of elements using octave shift to total non-zero elements.
+    pub fn importance_stats(&self) -> (usize, usize) {
+        self.inner().importance_stats()
     }
 
     /// Write to output

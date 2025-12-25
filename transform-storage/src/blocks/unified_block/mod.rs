@@ -313,6 +313,14 @@ impl<C: BlockConfig + EncodeHelper> Block for UnifiedBlock<1, C> {
         self.scale_log
     }
 
+    fn importance_stats(&self) -> (usize, usize) {
+        let zero_map: u64 = self.zero_map[0].into();
+        let octave_shift: u64 = self.octave_shift[0].into();
+        let nnz = zero_map.count_ones() as usize;
+        let shifted = (octave_shift & zero_map).count_ones() as usize;
+        (shifted, nnz)
+    }
+
     fn write_to<W: Write>(&self, w: &mut W) -> Result<()> {
         UnifiedBlock::write_to(self, w)
     }

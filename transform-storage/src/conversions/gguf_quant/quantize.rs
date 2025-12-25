@@ -125,21 +125,22 @@ fn encode_q5k_superblock(out: &mut [u8], d: f16, dmin: f16, scales: &[u8; 8], mi
     encode_q5k_block(out, d, dmin, scales, mins, blocks, bs);
 }
 
-/// Compute tensor importance from block statistics
+/// Compute tensor importance from block statistics.
+/// Uses ratio of octave-shifted elements to total non-zero elements.
+/// Higher ratio indicates larger dynamic range / more important values.
 pub fn compute_tensor_importance(matrix: &GraphMatrix) -> f32 {
-    let mut total_magnitude = 0.0f64;
-    let mut count = 0usize;
+    let mut total_shifted = 0usize;
+    let mut total_nnz = 0usize;
 
     for blk in matrix.block_iter() {
-        for (_, log2_mag, _) in blk.log_iter() {
-            total_magnitude += f64::exp2(log2_mag as f64);
-            count += 1;
-        }
+        let (shifted, nnz) = blk.importance_stats();
+        total_shifted += shifted;
+        total_nnz += nnz;
     }
 
-    if count == 0 {
+    if total_nnz == 0 {
         return 0.0;
     }
 
-    (total_magnitude / count as f64) as f32
+    total_shifted as f32 / total_nnz as f32
 }
