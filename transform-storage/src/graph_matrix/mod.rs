@@ -5,8 +5,11 @@ use crate::formats::GmatMetadata;
 use candle_core::{Result, Tensor};
 
 mod encoding;
-mod layout;
-mod stats;
+mod io;
+mod utils;
+
+#[cfg(test)]
+mod tests;
 
 /// Block-based sparse matrix with optional column index.
 ///
@@ -34,7 +37,7 @@ impl GraphMatrix {
     /// Calculate number of blocks per row (or per column for col-major).
     #[inline]
     pub(crate) fn blocks_per_row(&self) -> usize {
-        layout::calc_blocks_per_row(self.shape.1, self.format.block_size())
+        utils::calc_blocks_per_row(self.shape.1, self.format.block_size())
     }
 
     /// Calculate the block offset for a given row in row_blocks.
@@ -110,7 +113,7 @@ impl GraphMatrix {
         format: BlockFormat,
     ) -> Self {
         let (rows, cols) = shape;
-        let expected_blocks = layout::expected_block_count(rows, cols, &format);
+        let expected_blocks = utils::expected_block_count(rows, cols, &format);
 
         assert_eq!(
             row_blocks.len(),
@@ -290,7 +293,7 @@ impl GraphMatrix {
             return (0.0, 0.0, 0);
         }
 
-        let log2_center = stats::compute_median(&mut log2_vals);
+        let log2_center = utils::compute_median(&mut log2_vals);
         let log2_range = max_log - min_log;
         (log2_center, log2_range, log2_vals.len())
     }
@@ -299,7 +302,7 @@ impl GraphMatrix {
     pub fn row_log2_center(&self, row: usize) -> f32 {
         assert!(row < self.shape.0, "Row {} out of bounds", row);
         let mut log2_vals = self.row_traversal(row).collect_log_magnitudes();
-        stats::compute_median(&mut log2_vals)
+        utils::compute_median(&mut log2_vals)
     }
 
     /// Compute log2 center (geometric median) for a specific column.
@@ -307,7 +310,7 @@ impl GraphMatrix {
     pub fn col_log2_center(&self, col: usize) -> f32 {
         assert!(col < self.shape.1, "Column {} out of bounds", col);
         let mut log2_vals = self.col_traversal(col).collect_log_magnitudes();
-        stats::compute_median(&mut log2_vals)
+        utils::compute_median(&mut log2_vals)
     }
 
     /// Iterate over non-zero elements in a specific row.
@@ -376,18 +379,18 @@ impl GraphMatrix {
         }
 
         let block_size = self.format.block_size();
-        let blocks_per_row = layout::calc_blocks_per_row(cols, block_size);
-        let blocks_per_col = layout::calc_blocks_per_row(rows, block_size);
+        let blocks_per_row = utils::calc_blocks_per_row(cols, block_size);
+        let blocks_per_col = utils::calc_blocks_per_row(rows, block_size);
 
         // Pre-allocate output: cols columns, each with blocks_per_col blocks
         let mut col_blocks = Vec::with_capacity(cols * blocks_per_col);
 
-        // Reusable buffers for tile processing
-        let mut tile_block_refs: Vec<&AnyBlock> = Vec::with_capacity(block_size);
-        let mut row_in_block_buf = vec![0usize; block_size];
-        let mut transposed_buf = vec![AnyBlock::new_empty(self.format); block_size];
-        let mut scratch = vec![(f32::NEG_INFINITY, 0u8); block_size * block_size];
+        // Reusable buffers for tile processing (fixed-size arrays, max block_size=16)
         let empty_block = AnyBlock::new_empty(self.format);
+        let mut tile_block_refs: [&AnyBlock; 16] = [&empty_block; 16];
+        let mut row_in_block_buf: [usize; 16] = [0; 16];
+        let mut transposed_buf: [AnyBlock; 16] = std::array::from_fn(|_| AnyBlock::new_empty(self.format));
+        let mut scratch: [(f32, u8); 256] = [(f32::NEG_INFINITY, 0u8); 256];
 
         // Process in tiles of block_size rows × block_size cols
         for row_tile in 0..blocks_per_col {
@@ -395,26 +398,25 @@ impl GraphMatrix {
 
             for col_tile in 0..blocks_per_row {
                 // Gather block_size row block references for this tile
-                tile_block_refs.clear();
                 for i in 0..block_size {
                     let row = row_start + i;
                     if row < rows {
                         let block_offset = self.row_block_offset(row);
-                        tile_block_refs.push(&self.row_blocks[block_offset + col_tile]);
+                        tile_block_refs[i] = &self.row_blocks[block_offset + col_tile];
                         row_in_block_buf[i] = self.row_in_block(row);
                     } else {
                         // Pad with empty blocks for partial tiles
-                        tile_block_refs.push(&empty_block);
+                        tile_block_refs[i] = &empty_block;
                         row_in_block_buf[i] = 0;
                     }
                 }
 
                 // Transpose tile: block_size row blocks → block_size column blocks
                 transpose_tile(
-                    &tile_block_refs,
-                    &row_in_block_buf,
-                    &mut transposed_buf,
-                    &mut scratch,
+                    &tile_block_refs[..block_size],
+                    &row_in_block_buf[..block_size],
+                    &mut transposed_buf[..block_size],
+                    &mut scratch[..block_size * block_size],
                 );
 
                 // Store transposed blocks in column-major order
@@ -469,92 +471,4 @@ impl GraphMatrix {
         self
     }
 
-    /// Save GraphMatrix to a file in GMAT format.
-    ///
-    /// Uses GmatHeader for format specification.
-    ///
-    /// # Arguments
-    /// - `path`: File path to save to
-    ///
-    /// # Errors
-    /// Returns error if file creation or writing fails
-    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        use crate::formats::GmatHeader;
-
-        let mut file = std::fs::File::create(path)?;
-
-        // Convert format to u8
-        let format_byte: u8 = self.format.into();
-
-        // Write header with borrowed metadata (avoids clone)
-        let (rows, cols) = self.shape;
-        GmatHeader::write_header_to(
-            &mut file,
-            format_byte,
-            rows as u64,
-            cols as u64,
-            self.metadata.as_ref(),
-        )?;
-
-        // Write all blocks
-        for block in &self.row_blocks {
-            block.write_to(&mut file)?;
-        }
-
-        Ok(())
-    }
-
-    /// Load GraphMatrix from a file in GMAT format.
-    ///
-    /// Uses GmatHeader for format specification.
-    ///
-    /// # Arguments
-    /// - `path`: File path to load from
-    ///
-    /// # Errors
-    /// Returns error if:
-    /// - File reading fails
-    /// - Header is invalid
-    pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
-        let mut file = std::fs::File::open(path)?;
-        Self::load_from_reader(&mut file)
-    }
-
-    /// Load GraphMatrix from a reader in GMAT format.
-    ///
-    /// Uses GmatHeader for format specification. The reader should be positioned
-    /// at the start of the GMAT data.
-    ///
-    /// # Arguments
-    /// - `reader`: Reader positioned at start of GMAT data
-    ///
-    /// # Errors
-    /// Returns error if:
-    /// - Reading fails
-    /// - Header is invalid
-    pub fn load_from_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        use crate::formats::GmatHeader;
-
-        let header = GmatHeader::read_from(reader)?;
-        let format = BlockFormat::try_from(header.format)?;
-
-        let (rows, cols) = header.shape();
-        let expected_blocks = layout::expected_block_count(rows, cols, &format);
-
-        let mut row_blocks = Vec::with_capacity(expected_blocks);
-        for _ in 0..expected_blocks {
-            row_blocks.push(AnyBlock::read_from(format, reader)?);
-        }
-
-        // Take ownership of metadata instead of cloning
-        let GmatHeader { metadata, .. } = header;
-
-        Ok(Self {
-            row_blocks,
-            col_blocks: None,
-            shape: (rows, cols),
-            format,
-            metadata,
-        })
-    }
 }

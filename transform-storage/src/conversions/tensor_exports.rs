@@ -1,6 +1,6 @@
 //! Tensor and sparse format export methods for GraphMatrix.
 
-use crate::graph_matrix::GraphMatrix;
+use crate::GraphMatrix;
 use candle_core::{Device, Result, Tensor};
 
 impl GraphMatrix {
@@ -35,7 +35,7 @@ impl GraphMatrix {
     }
 
     /// Export to CSR format.
-    pub fn to_csr(&self) -> crate::conversions::CsrMatrix {
+    pub fn to_csr(&self) -> super::CsrMatrix {
         let (rows, _cols) = self.shape();
         // Pre-allocate based on nnz
         let nnz = self.nnz();
@@ -50,11 +50,11 @@ impl GraphMatrix {
             }
             row_ptr.push(values.len());
         }
-        crate::conversions::CsrMatrix::new(values, col_indices, row_ptr, self.shape())
+        super::CsrMatrix::new(values, col_indices, row_ptr, self.shape())
     }
 
     /// Export to COO format.
-    pub fn to_coo(&self) -> crate::conversions::CooMatrix {
+    pub fn to_coo(&self) -> super::CooMatrix {
         let (rows, _cols) = self.shape();
         // Pre-allocate based on nnz
         let nnz = self.nnz();
@@ -68,7 +68,7 @@ impl GraphMatrix {
                 values.push(value);
             }
         }
-        crate::conversions::CooMatrix::new(values, row_indices, col_indices, self.shape())
+        super::CooMatrix::new(values, row_indices, col_indices, self.shape())
     }
 
     /// Helper: iterate over log-sparse entries, calling visitor for each (row, col, log_mag, sign).
@@ -90,7 +90,7 @@ impl GraphMatrix {
     }
 
     /// Export to log-sparse COO format.
-    pub fn to_log_sparse(&self) -> crate::conversions::LogSparseMatrix {
+    pub fn to_log_sparse(&self) -> super::LogSparseMatrix {
         let mut log2_values = Vec::new();
         let mut signs = Vec::new();
         let mut row_indices = Vec::new();
@@ -103,7 +103,7 @@ impl GraphMatrix {
             signs.push(sign);
         });
 
-        crate::conversions::LogSparseMatrix::new(
+        super::LogSparseMatrix::new(
             log2_values,
             signs,
             row_indices,
@@ -113,7 +113,7 @@ impl GraphMatrix {
     }
 
     /// Export to log-sparse CSR format.
-    pub fn to_log_sparse_csr(&self) -> crate::conversions::LogSparseCsrMatrix {
+    pub fn to_log_sparse_csr(&self) -> super::LogSparseCsrMatrix {
         let (rows, _) = self.shape();
         let mut log2_values = Vec::new();
         let mut signs = Vec::new();
@@ -138,7 +138,7 @@ impl GraphMatrix {
             *ptr = final_len;
         }
 
-        crate::conversions::LogSparseCsrMatrix::new(
+        super::LogSparseCsrMatrix::new(
             log2_values,
             signs,
             col_indices,

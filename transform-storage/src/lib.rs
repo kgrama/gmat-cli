@@ -24,19 +24,14 @@
 //! let any_matrix = AnyGraphMatrix::from_dense(&data, (4, 4), &config);
 //! ```
 
-pub mod block;
 pub mod blocks;
 pub mod config;
 pub mod conversions;
 pub mod formats;
 pub mod graph_matrix;
-mod tensor_exports;
-
-#[cfg(test)]
-mod graph_matrix_tests;
 
 // Re-exports
-pub use block::Block;
+pub use blocks::Block;
 pub use blocks::{Block16x4, Block16x8, Block8x4, Block8x8, BlockFormat};
 pub use config::{AnyGraphMatrix, StorageConfig};
 pub use conversions::{

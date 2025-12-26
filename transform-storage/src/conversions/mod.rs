@@ -10,6 +10,7 @@ mod export_helpers;
 mod log_sparse;
 mod safetensors_import;
 mod sparse;
+mod tensor_exports;
 
 pub mod gguf_quant;
 mod quant;

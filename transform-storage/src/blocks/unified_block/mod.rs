@@ -6,7 +6,7 @@ mod iteration;
 
 use super::configs::{BlockConfig, Config16x4, Config16x8, Config8x4, Config8x8};
 use super::traits::{ElementMask, EncodingStrategy};
-use crate::block::{get_packed_nibble, set_packed_nibble, Block, EncodedBlock, EMPTY_SCALE};
+use crate::blocks::block::{get_packed_nibble, set_packed_nibble, Block, EncodedBlock, EMPTY_SCALE};
 use half::f16;
 use std::io::{Read, Result, Write};
 use std::marker::PhantomData;

@@ -1,7 +1,7 @@
 //! Tests for GraphMatrix
 
-use super::blocks::{AnyBlock, BlockFormat};
-use super::graph_matrix::GraphMatrix;
+use super::GraphMatrix;
+use crate::blocks::{AnyBlock, BlockFormat};
 use candle_core::{Device, Tensor};
 use tempfile::NamedTempFile;
 
