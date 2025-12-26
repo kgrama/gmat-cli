@@ -234,7 +234,7 @@ fn analyze_model_tensors(
             let (rows, cols) = shape;
 
             let gguf_name = safetensor_to_gguf_name(source_name);
-            let quant_type = recommend_quant_type(source_name, importance, rows * cols, thresholds);
+            let quant_type = recommend_quant_type(source_name, importance, rows, cols, thresholds);
 
             // Progress update
             let count = processed.fetch_add(1, Ordering::Relaxed) + 1;

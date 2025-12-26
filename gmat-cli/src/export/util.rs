@@ -75,9 +75,10 @@ impl ImportanceThresholds {
     }
 }
 
-/// Recommend quantization type based on tensor name, importance, and size.
+/// Recommend quantization type based on tensor name, importance, shape, and size.
 ///
 /// Uses heuristics:
+/// - Unaligned cols (not divisible by 32) → F16 (fallback)
 /// - High-importance tensors (embeddings, attention output) → Q6_K
 /// - Standard tensors → Q4_K_M
 /// - Small tensors (<1M params) → Q8_0
@@ -88,9 +89,17 @@ impl ImportanceThresholds {
 pub fn recommend_quant_type(
     tensor_name: &str,
     importance: f32,
-    size: usize,
+    rows: usize,
+    cols: usize,
     thresholds: &ImportanceThresholds,
 ) -> String {
+    // Unaligned columns: must use F16 (1D biases, vision tensors, etc.)
+    if !cols.is_multiple_of(32) {
+        return "f16".to_string();
+    }
+
+    let size = rows * cols;
+
     // Small tensors: use Q8_0 for minimal impact
     if size < 1_000_000 {
         return "q8_0".to_string();
@@ -149,6 +158,8 @@ pub fn recommend_quant_type(
 /// Parse quantization type string to GgufQuantType enum.
 pub fn parse_quant_type(s: &str) -> Result<GgufQuantType> {
     match s.to_lowercase().as_str() {
+        "f32" => Ok(GgufQuantType::F32),
+        "f16" => Ok(GgufQuantType::F16),
         "q8_0" => Ok(GgufQuantType::Q8_0),
         "q4_0" => Ok(GgufQuantType::Q4_0),
         "q4_1" => Ok(GgufQuantType::Q4_1),
@@ -306,11 +317,26 @@ mod tests {
     // ==================== recommend_quant_type tests ====================
 
     #[test]
+    fn test_unaligned_cols_gets_f16() {
+        let thresholds = ImportanceThresholds::default();
+        // 1D bias tensor: cols=1 (not 32-aligned) -> f16
+        assert_eq!(
+            recommend_quant_type("router.bias", 0.5, 64, 1, &thresholds),
+            "f16"
+        );
+        // Vision tensor: cols=17 (not 32-aligned) -> f16
+        assert_eq!(
+            recommend_quant_type("vision.proj", 0.5, 100, 17, &thresholds),
+            "f16"
+        );
+    }
+
+    #[test]
     fn test_small_tensor_gets_q8_0() {
         let thresholds = ImportanceThresholds::default();
-        // Under 1M params should get Q8_0
+        // Under 1M params should get Q8_0 (500 rows * 1024 cols = 512K)
         assert_eq!(
-            recommend_quant_type("any.tensor", 0.5, 500_000, &thresholds),
+            recommend_quant_type("any.tensor", 0.5, 500, 1024, &thresholds),
             "q8_0"
         );
     }
@@ -318,9 +344,9 @@ mod tests {
     #[test]
     fn test_embed_tokens_high_importance() {
         let thresholds = ImportanceThresholds::default();
-        // Above high threshold (0.2) -> q8_0
+        // Above high threshold (0.2) -> q8_0 (1000 rows * 2048 cols = ~2M)
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.25, 2_000_000, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.25, 1000, 2048, &thresholds),
             "q8_0"
         );
     }
@@ -330,7 +356,7 @@ mod tests {
         let thresholds = ImportanceThresholds::default();
         // Below high threshold (0.2) -> q6_k
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.15, 2_000_000, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.15, 1000, 2048, &thresholds),
             "q6_k"
         );
     }
@@ -340,7 +366,7 @@ mod tests {
         let thresholds = ImportanceThresholds::default();
         // Above high threshold (0.2) -> q8_0
         assert_eq!(
-            recommend_quant_type("lm_head.weight", 0.25, 2_000_000, &thresholds),
+            recommend_quant_type("lm_head.weight", 0.25, 1000, 2048, &thresholds),
             "q8_0"
         );
     }
@@ -353,7 +379,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.self_attn.o_proj.weight",
                 0.15,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q6_k"
@@ -368,7 +395,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.self_attn.o_proj.weight",
                 0.05,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q5_k_m"
@@ -382,7 +410,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.self_attn.q_proj.weight",
                 0.5,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q4_k_m"
@@ -391,7 +420,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.self_attn.k_proj.weight",
                 0.5,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q4_k_m"
@@ -405,7 +435,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.mlp.gate_proj.weight",
                 0.5,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q4_k_m"
@@ -414,7 +445,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.mlp.up_proj.weight",
                 0.5,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q4_k_m"
@@ -429,7 +461,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.mlp.down_proj.weight",
                 0.15,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q6_k"
@@ -444,7 +477,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.mlp.down_proj.weight",
                 0.05,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q5_k_m"
@@ -455,7 +489,7 @@ mod tests {
     fn test_default_tensor_gets_q4_k_m() {
         let thresholds = ImportanceThresholds::default();
         assert_eq!(
-            recommend_quant_type("some.random.tensor", 0.5, 2_000_000, &thresholds),
+            recommend_quant_type("some.random.tensor", 0.5, 1000, 2048, &thresholds),
             "q4_k_m"
         );
     }
@@ -467,13 +501,13 @@ mod tests {
 
         // 0.4 is below custom high (0.5), so gets q6_k not q8_0
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.4, 2_000_000, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.4, 1000, 2048, &thresholds),
             "q6_k"
         );
 
         // 0.6 is above custom high (0.5), so gets q8_0
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.6, 2_000_000, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.6, 1000, 2048, &thresholds),
             "q8_0"
         );
 
@@ -482,7 +516,8 @@ mod tests {
             recommend_quant_type(
                 "model.layers.0.self_attn.o_proj.weight",
                 0.2,
-                2_000_000,
+                1000,
+                2048,
                 &thresholds
             ),
             "q5_k_m"
@@ -490,6 +525,14 @@ mod tests {
     }
 
     // ==================== parse_quant_type tests ====================
+
+    #[test]
+    fn test_parse_unquantized() {
+        assert_eq!(parse_quant_type("f32").unwrap(), GgufQuantType::F32);
+        assert_eq!(parse_quant_type("f16").unwrap(), GgufQuantType::F16);
+        assert_eq!(parse_quant_type("F32").unwrap(), GgufQuantType::F32);
+        assert_eq!(parse_quant_type("F16").unwrap(), GgufQuantType::F16);
+    }
 
     #[test]
     fn test_parse_legacy_quants() {
