@@ -25,7 +25,12 @@ pub fn safetensor_to_gguf_name(st_name: &str) -> String {
             let layer_num = &rest[..dot_pos];
             let tensor_type = &rest[dot_pos + 1..];
 
-            // Map tensor types
+            // Try MoE expert patterns first (more specific)
+            if let Some(gguf_name) = map_moe_tensor(layer_num, tensor_type) {
+                return gguf_name;
+            }
+
+            // Map dense tensor types
             let gguf_type = match tensor_type {
                 "self_attn.q_proj.weight" => "attn_q.weight",
                 "self_attn.k_proj.weight" => "attn_k.weight",
@@ -45,6 +50,68 @@ pub fn safetensor_to_gguf_name(st_name: &str) -> String {
 
     // Fallback: use original name if no mapping found
     st_name.to_string()
+}
+
+/// Map MoE-specific tensor names to GGUF format.
+/// Returns None if not an MoE tensor pattern.
+fn map_moe_tensor(layer_num: &str, tensor_type: &str) -> Option<String> {
+    // MoE router (expert gate/selector)
+    // Patterns: mlp.gate.weight, block_sparse_moe.gate.weight
+    if tensor_type == "mlp.gate.weight" || tensor_type == "block_sparse_moe.gate.weight" {
+        return Some(format!("blk.{}.ffn_gate_inp.weight", layer_num));
+    }
+
+    // Shared experts (DeepSeek/Qwen style)
+    // Pattern: mlp.shared_experts.{gate,up,down}_proj.weight
+    if let Some(proj) = tensor_type.strip_prefix("mlp.shared_experts.") {
+        let gguf_suffix = match proj {
+            "gate_proj.weight" => "ffn_gate_shexp.weight",
+            "up_proj.weight" => "ffn_up_shexp.weight",
+            "down_proj.weight" => "ffn_down_shexp.weight",
+            _ => return None,
+        };
+        return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
+    }
+
+    // Expert weights - Qwen/DeepSeek style
+    // Pattern: mlp.experts.{j}.{gate,up,down}_proj.weight
+    if let Some(rest) = tensor_type.strip_prefix("mlp.experts.") {
+        if let Some((expert_idx, proj)) = parse_expert_index(rest) {
+            let gguf_suffix = match proj {
+                "gate_proj.weight" => format!("ffn_gate.{}.weight", expert_idx),
+                "up_proj.weight" => format!("ffn_up.{}.weight", expert_idx),
+                "down_proj.weight" => format!("ffn_down.{}.weight", expert_idx),
+                _ => return None,
+            };
+            return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
+        }
+    }
+
+    // Expert weights - Mixtral style
+    // Pattern: block_sparse_moe.experts.{j}.w1/w2/w3.weight
+    if let Some(rest) = tensor_type.strip_prefix("block_sparse_moe.experts.") {
+        if let Some((expert_idx, proj)) = parse_expert_index(rest) {
+            let gguf_suffix = match proj {
+                "w1.weight" => format!("ffn_gate.{}.weight", expert_idx),
+                "w2.weight" => format!("ffn_down.{}.weight", expert_idx),
+                "w3.weight" => format!("ffn_up.{}.weight", expert_idx),
+                _ => return None,
+            };
+            return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
+        }
+    }
+
+    None
+}
+
+/// Parse expert index from pattern like "0.gate_proj.weight" or "15.w1.weight"
+/// Returns (expert_index, remaining_projection_part)
+fn parse_expert_index(s: &str) -> Option<(usize, &str)> {
+    let dot_pos = s.find('.')?;
+    let idx_str = &s[..dot_pos];
+    let rest = &s[dot_pos + 1..];
+    let idx = idx_str.parse::<usize>().ok()?;
+    Some((idx, rest))
 }
 
 /// Default importance thresholds for quantization decisions.
@@ -311,6 +378,88 @@ mod tests {
         assert_eq!(
             safetensor_to_gguf_name("model.layers.0.some_new_thing.weight"),
             "blk.0.some_new_thing.weight"
+        );
+    }
+
+    // ==================== MoE tensor mapping tests ====================
+
+    #[test]
+    fn test_moe_router_qwen_style() {
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.gate.weight"),
+            "blk.0.ffn_gate_inp.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.15.mlp.gate.weight"),
+            "blk.15.ffn_gate_inp.weight"
+        );
+    }
+
+    #[test]
+    fn test_moe_router_mixtral_style() {
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.gate.weight"),
+            "blk.0.ffn_gate_inp.weight"
+        );
+    }
+
+    #[test]
+    fn test_moe_experts_qwen_style() {
+        // Expert 0
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.experts.0.gate_proj.weight"),
+            "blk.0.ffn_gate.0.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.experts.0.up_proj.weight"),
+            "blk.0.ffn_up.0.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.experts.0.down_proj.weight"),
+            "blk.0.ffn_down.0.weight"
+        );
+        // Expert 63 (high index)
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.5.mlp.experts.63.gate_proj.weight"),
+            "blk.5.ffn_gate.63.weight"
+        );
+    }
+
+    #[test]
+    fn test_moe_experts_mixtral_style() {
+        // w1 -> ffn_gate, w2 -> ffn_down, w3 -> ffn_up
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.experts.0.w1.weight"),
+            "blk.0.ffn_gate.0.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.experts.0.w2.weight"),
+            "blk.0.ffn_down.0.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.experts.0.w3.weight"),
+            "blk.0.ffn_up.0.weight"
+        );
+        // Expert 7
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.31.block_sparse_moe.experts.7.w1.weight"),
+            "blk.31.ffn_gate.7.weight"
+        );
+    }
+
+    #[test]
+    fn test_moe_shared_experts() {
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.shared_experts.gate_proj.weight"),
+            "blk.0.ffn_gate_shexp.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.shared_experts.up_proj.weight"),
+            "blk.0.ffn_up_shexp.weight"
+        );
+        assert_eq!(
+            safetensor_to_gguf_name("model.layers.0.mlp.shared_experts.down_proj.weight"),
+            "blk.0.ffn_down_shexp.weight"
         );
     }
 

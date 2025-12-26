@@ -2,6 +2,7 @@
 
 mod metadata;
 mod streaming;
+pub mod token_parsers;
 
 use anyhow::{Context, Result};
 use memmap2::Mmap;
@@ -125,7 +126,82 @@ pub fn run(model_path: &str, config_path: Option<&str>, output_path: Option<&str
     )?;
 
     write_import_metadata(&output_dir, &config, &saved)?;
+
+    // Parse and store tokenizer files
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(parse_and_store_tokenizer(path, &output_dir))?;
+
     println!("\n=== Import Complete: {} tensors ===", saved.len());
+    Ok(())
+}
+
+/// Parse and store tokenizer files from source model directory.
+async fn parse_and_store_tokenizer(source_dir: &Path, output_dir: &Path) -> Result<()> {
+    use crate::tokens::{save_token_tree, SpecialTokenMapping};
+    use token_parsers::{parse_hf_tokenizer, parse_hf_tokenizer_config, parse_tiktoken};
+
+    let source_dir = if source_dir.is_file() {
+        source_dir.parent().unwrap_or(source_dir)
+    } else {
+        source_dir
+    };
+
+    let tokenizer_path = source_dir.join("tokenizer.json");
+    let config_path = source_dir.join("tokenizer_config.json");
+
+    // Try HuggingFace tokenizer.json first
+    let token_tree = if tokenizer_path.exists() {
+        // Build special token mapping from tokenizer_config.json
+        let special_mapping = if config_path.exists() {
+            let parsed_config = parse_hf_tokenizer_config(&config_path)?;
+            println!(
+                "Parsed tokenizer_config.json: {} special token mappings",
+                parsed_config.tokens.len()
+            );
+            parsed_config.to_mapping()
+        } else {
+            println!("No tokenizer_config.json found, using empty special token mapping");
+            SpecialTokenMapping::new()
+        };
+
+        // Parse tokenizer.json and build token tree
+        let tree = parse_hf_tokenizer(&tokenizer_path, &special_mapping)?;
+        println!(
+            "Parsed tokenizer.json: {} tokens, type: {:?}",
+            tree.vocab_size(),
+            tree.tokenizer_type
+        );
+        tree
+    } else {
+        // Try tiktoken format
+        let tiktoken_files: Vec<_> = std::fs::read_dir(source_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|ext| ext == "tiktoken")
+            })
+            .collect();
+
+        if let Some(tiktoken_entry) = tiktoken_files.first() {
+            let tiktoken_path = tiktoken_entry.path();
+            println!("Found tiktoken file: {}", tiktoken_path.display());
+            let tree = parse_tiktoken(&tiktoken_path)?;
+            println!(
+                "Parsed tiktoken: {} tokens",
+                tree.vocab_size()
+            );
+            tree
+        } else {
+            println!("No tokenizer.json or .tiktoken found, skipping tokenizer import");
+            return Ok(());
+        }
+    };
+
+    // Save to intermediate format
+    save_token_tree(&token_tree, output_dir).await?;
+    println!("Saved tokens.bin");
+
     Ok(())
 }
 

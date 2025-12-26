@@ -20,11 +20,13 @@ gguf-rs-lib = "0.2"
 half = "2"
 rayon = "1.10"
 memmap2 = "0.9"
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util"] }
 tokio-rayon = "2"
 
 # Optional: GGUF validation via llama.cpp
 llama-cpp-2 = { version = "0.1", optional = true }
+base64 = "0.22.1"
+bincode = "1"
 
 [dev-dependencies]
 tempfile = "3"

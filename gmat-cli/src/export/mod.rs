@@ -3,6 +3,7 @@
 //! Uses async pipeline with tokio-rayon for CPU-bound quantization.
 
 mod shard;
+mod token_metadata;
 mod util;
 mod validate;
 
@@ -141,6 +142,7 @@ use crate::common::{load_config, load_gmat_model};
 use crate::config::export_config::{ExportConfig, QuantizationConfig, TensorExportMapping};
 
 use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
+use token_metadata::TokenMetadata;
 use util::{
     ImportanceThresholds, num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name,
 };
@@ -636,6 +638,18 @@ async fn run_async(
     let total = jobs.len();
     println!("\nProcessing {} tensors...", total);
 
+    // Load tokenizer metadata if available
+    let token_meta = match TokenMetadata::load(&model_dir).await {
+        Ok(meta) => {
+            println!("Loaded tokenizer: {} tokens", meta.vocab_size());
+            Some(meta)
+        }
+        Err(e) => {
+            eprintln!("Warning: Could not load tokenizer: {}", e);
+            None
+        }
+    };
+
     let buffer_size = num_cpus().saturating_mul(2).max(4);
 
     // Capture values for closures
@@ -661,7 +675,7 @@ async fn run_async(
         },
         // Writer: stream-write to GGUF
         move |mut rx: mpsc::Receiver<Result<ProcessedTensor>>, state: Arc<PipelineState>| async move {
-            let mut writer = GgufStreamWriter::new(&metadata_for_writer, &output_file_for_writer, shard_size);
+            let mut writer = GgufStreamWriter::new(&metadata_for_writer, &output_file_for_writer, shard_size, token_meta);
 
             while let Some(result) = rx.recv().await {
                 let tensor = result?;
