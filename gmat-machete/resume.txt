@@ -1,0 +1,131 @@
+gmat-machete - Model Compression & Pruning Toolkit
+=================================================
+
+Purpose: Tools for reducing model size through static weight analysis.
+Named for cutting away unnecessary weights. All methods operate on
+weights directly - no activations, gradients, or inference required.
+
+MAGNITUDE-BASED PRUNING
+-----------------------
+
+1. Threshold Pruning
+   - Global magnitude threshold: zero weights below |w| < threshold
+   - Layer-wise percentile: remove bottom N% by magnitude per tensor
+   - Log2-domain thresholds: prune where log2_mag < threshold
+
+2. Block-Level Pruning
+   - Identify GMAT blocks with all values below threshold
+   - Remove entire blocks that contribute negligibly
+   - Block energy pruning: sum of squared magnitudes
+
+3. Octave-Based Pruning
+   - Group weights by log2 magnitude octave
+   - Prune lowest octaves (smallest magnitudes)
+   - Preserve octave distribution shape
+
+STRUCTURED PRUNING
+------------------
+
+1. Row/Column Elimination
+   - Remove rows with low L2 norm
+   - Remove columns with low L2 norm
+   - Balanced row-column pruning
+
+2. Channel Pruning
+   - Identify low-magnitude channels
+   - Remove entire filter channels
+   - Preserve channel count alignment
+
+3. N:M Sparsity Patterns
+   - Enforce N zeros per M elements (2:4, 4:8)
+   - Select which N to zero by magnitude
+   - Block-aligned N:M patterns
+
+EXPERT PRUNING (MoE)
+--------------------
+
+1. Weight-Based Expert Analysis
+   - Compare expert weight norms
+   - Identify near-duplicate experts via cosine similarity
+   - Find experts with low aggregate magnitude
+
+2. Expert Merging
+   - Average similar experts into one
+   - Weighted merge based on magnitude ratios
+   - Reduce expert count while preserving capacity
+
+3. Router Weight Analysis
+   - Analyze router projection weights
+   - Identify experts with low router affinity
+   - Static prediction of expert utilization
+
+SPARSITY ANALYSIS
+-----------------
+
+1. Current Sparsity Measurement
+   - Count zeros/near-zeros per tensor
+   - Sparsity histograms by layer type
+   - Block-level sparsity patterns
+
+2. Natural Sparsity Detection
+   - Find tensors that are already sparse
+   - Identify sparse regions within dense tensors
+   - Map sparsity patterns across model
+
+3. Sparsity Pattern Conversion
+   - Convert unstructured to block sparsity
+   - Align sparsity to hardware patterns
+   - Optimal zero placement
+
+LOW-RANK APPROXIMATION
+----------------------
+
+1. SVD Decomposition
+   - Compute singular values per weight matrix
+   - Truncated SVD: W ≈ U_k S_k V_k^T
+   - Error-bounded rank selection
+
+2. Rank Analysis
+   - Effective rank estimation
+   - Identify low-rank tensors
+   - Layer-wise rank distribution
+
+3. Factorization
+   - LoRA-style: W ≈ W_0 + AB
+   - Optimal rank per layer
+   - Merge factored weights back
+
+QUANTIZATION-AWARE PRUNING
+--------------------------
+
+1. Joint Prune-Quantize
+   - Prune before quantization
+   - Account for quantization error in pruning decision
+   - GMAT block-aligned pruning
+
+2. Sparse Block Optimization
+   - Skip encoding of zero blocks
+   - Compressed sparse block format
+   - Bit allocation for sparse tensors
+
+SIMILARITY ANALYSIS
+-------------------
+
+1. Weight Correlation
+   - Cross-layer weight similarity
+   - Attention head similarity
+   - Expert weight correlation matrix
+
+2. Redundancy Detection
+   - Find near-duplicate weight blocks
+   - Identify repeated patterns
+   - Weight sharing opportunities
+
+PLANNED GMAT INTEGRATION
+------------------------
+
+- Operate directly on log2 magnitude representation
+- Prune by log2_mag threshold (no exp2 needed)
+- Block-aligned pruning decisions
+- Export pruning masks as GMAT metadata
+- Generate pruning configs from static analysis

@@ -1,0 +1,13 @@
+[package]
+name = "gmat-machete"
+version = "0.1.0"
+edition = "2024"
+description = "Pruning, sparsity, and model compression utilities for GMAT"
+
+[dependencies]
+transform-storage = { path = "../transform-storage" }
+anyhow = "1"
+rayon = "1.10"
+
+[dev-dependencies]
+tempfile = "3"

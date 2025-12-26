@@ -1,0 +1,197 @@
+gmat-potter - Transform & Analysis Toolkit
+==========================================
+
+Purpose: Tools for analyzing and transforming weight structure using
+signal processing techniques. Named for shaping and molding data.
+All methods operate on weights directly - pure DSP, no inference.
+
+TRELLIS QUANTIZATION
+--------------------
+
+1. Trellis Coded Quantization (TCQ)
+   - Viterbi algorithm for optimal path through quantization trellis
+   - Minimize cumulative quantization error along tensor rows
+   - State-dependent codebook selection
+   - Error diffusion between adjacent values
+
+2. Trellis Optimization
+   - Dynamic programming for globally optimal quantization
+   - Constraint propagation (scale limits, range bounds)
+   - Multi-pass refinement with error feedback
+   - Parallel trellis processing per row
+
+3. GMAT-Aware Trellis
+   - Operate on log2 magnitudes directly
+   - Block-aligned trellis boundaries
+   - Sign bit preservation during optimization
+   - Octave-aware error weighting
+
+SPARSE PATH ANALYSIS
+--------------------
+
+1. Log-Domain Path Tracing
+   - Trace weight paths through matrices in log2 domain
+   - Add log magnitudes instead of multiplying
+   - Identify dominant paths by cumulative magnitude
+   - No actual matrix multiplication needed
+
+2. Sparse-to-Sparse Mapping
+   - Given sparse input pattern, predict sparse output
+   - Path pruning by magnitude threshold
+   - Build weight dependency graphs
+
+3. Router Path Analysis (MoE)
+   - Trace router weight → expert weight paths
+   - Static prediction of expert selection likelihood
+   - Identify experts with weak router connectivity
+   - Fold router bias into expert weights
+
+4. Static Router Elimination
+   - Analyze router projection matrix structure
+   - Identify deterministic routing patterns
+   - Bake routing decisions into weights
+   - Eliminate e_score_correction_bias tensors
+   - Smaller GGUF exports without router overhead
+
+INFERENCE SIMULATION
+--------------------
+
+1. Embedding-Derived Pseudo-Activations
+   - Analyze embedding matrix GMAT blocks by magnitude
+   - Select representative blocks: top-20, mid-20, bottom-20
+   - Create synthetic "activations" from embedding weight structure
+   - No real tokens needed - embeddings encode typical patterns
+   - Calibration-free alternative to Wanda's |W| × ||X||₂
+
+2. Simulated Forward Pass
+   - Trace representative embeddings through model graph
+   - Log-domain "multiplication" via addition
+   - Propagate pseudo-activations layer by layer
+   - No actual tensor ops - pure weight analysis
+
+3. Weight Importance from Pseudo-Activations
+   - Compute |W| × ||E_representative||₂ per weight
+   - E_representative derived from embedding magnitude distribution
+   - Enables pruning decisions without inference
+   - Matches Wanda-style importance without calibration data
+
+4. Expert Selection Simulation
+   - Route pseudo-activations through MoE layers
+   - Predict top-k expert selection per embedding class
+   - Build expert utilization histograms
+   - Identify dead/redundant experts statically
+
+5. Attention Pattern Estimation
+   - Estimate attention patterns from Q/K/V weight norms
+   - Simulate query/key interactions with pseudo-activations
+   - Identify attention heads with low activation energy
+   - Predict head importance without running inference
+
+DCT/DST TRANSFORMS
+------------------
+
+1. Discrete Cosine Transform (DCT)
+   - DCT-II: standard signal compression transform
+   - DCT-IV: modified discrete cosine transform
+   - Block-wise DCT for weight matrices
+   - Frequency domain weight representation
+
+2. Discrete Sine Transform (DST)
+   - DST-I through DST-IV variants
+   - Complementary to DCT for boundary conditions
+   - Weight symmetry exploitation
+
+3. Transform Applications
+   - Frequency domain compression
+   - Identify low-frequency weight components
+   - Spectral coefficient pruning
+   - Transform domain quantization
+
+WAVELET TRANSFORMS
+------------------
+
+1. Wavelet Decomposition
+   - Haar wavelets: simplest, O(n) computation
+   - Daubechies wavelets: smoother approximations
+   - Multi-level decomposition
+   - 2D wavelets for weight matrices
+
+2. Wavelet Applications
+   - Multi-resolution weight analysis
+   - Wavelet coefficient thresholding
+   - Sparse wavelet representation
+   - Edge/discontinuity detection in weights
+
+FOURIER ANALYSIS
+----------------
+
+1. DFT/FFT
+   - Fast Fourier Transform for weight analysis
+   - Frequency content of weight distributions
+   - Periodic pattern detection
+
+2. Applications
+   - Identify repetitive weight structures
+   - Frequency-based filtering
+   - Power spectrum analysis
+   - Phase structure between layers
+
+WEIGHT STATISTICS
+-----------------
+
+1. Distribution Analysis
+   - Weight histograms per layer
+   - Log-domain magnitude distribution
+   - Moment analysis: mean, variance, skewness, kurtosis
+   - Outlier detection and analysis
+
+2. Block Statistics
+   - Per-block magnitude statistics
+   - Cross-block correlation
+   - Block energy distribution
+
+3. Layer Comparison
+   - Cross-layer weight correlation
+   - Layer-wise distribution comparison
+   - Identify anomalous layers
+
+INFORMATION THEORY
+------------------
+
+1. Entropy Analysis
+   - Weight distribution entropy
+   - Per-block entropy estimation
+   - Compression bound estimation
+
+2. Redundancy Detection
+   - Mutual information between weight blocks
+   - Cross-layer information sharing
+   - Identify compressible regions
+
+VISUALIZATION
+-------------
+
+1. Weight Heatmaps
+   - Magnitude visualization
+   - Sparsity pattern maps
+   - Block structure visualization
+
+2. Spectral Visualization
+   - DCT/DFT coefficient plots
+   - Wavelet decomposition display
+   - Frequency content maps
+
+3. Distribution Plots
+   - Weight histograms
+   - Log-magnitude distributions
+   - Layer comparison charts
+
+PLANNED GMAT INTEGRATION
+------------------------
+
+- Operate directly on log2 magnitude representation
+- Block-aligned transform boundaries
+- Integrate with GMAT traversal iterators
+- Export analysis results as metadata
+- Visualization output (SVG, PNG)
+- Transform coefficients stored as GMAT blocks
