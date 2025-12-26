@@ -169,7 +169,7 @@ async fn run_streaming_import_async(
 fn normalize_tensor_shape(shape: &[usize]) -> (usize, usize, usize) {
     match shape.len() {
         0 => (1, 1, 1),               // scalar
-        1 => (1, 1, shape[0]),        // 1D -> 1xN
+        1 => (1, shape[0], 1),        // 1D -> Nx1 (column vector)
         2 => (1, shape[0], shape[1]), // 2D -> 1 plane
         _ => {
             // N-D: leading dims are planes, last 2 dims are matrix
@@ -401,11 +401,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extracted_tensor_1d_becomes_1xn() {
+    fn test_extracted_tensor_1d_becomes_nx1() {
+        // 1D tensors become Nx1 column vectors for GGUF alignment
         let tensor = ExtractedTensor {
             name: "model.bias".to_string(),
             target_uuid: "550e8400-e29b-41d4-a716-446655440001".to_string(),
-            shape: (1, 64),
+            shape: (64, 1),
             dtype_str: "F32".to_string(),
             f32_data: vec![0.1; 64],
             original_shape: vec![64],
@@ -413,7 +414,7 @@ mod tests {
             num_planes: 1,
         };
 
-        assert_eq!(tensor.shape, (1, 64));
+        assert_eq!(tensor.shape, (64, 1));
     }
 
     #[test]

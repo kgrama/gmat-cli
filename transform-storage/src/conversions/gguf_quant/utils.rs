@@ -117,10 +117,12 @@ pub fn compute_superblock_scales(gmat_blocks: &[&AnyBlock]) -> (f16, f16) {
 //=============================================================================
 
 /// Determine best quant type given tensor dimensions and target.
-/// Falls back to legacy format if K-quant alignment not met.
+/// Falls back to legacy format if K-quant alignment not met, or F16 if unaligned.
 pub fn select_quant_with_fallback(cols: usize, target: GgufQuantType) -> GgufQuantType {
     use GgufQuantType::*;
     match target {
+        // Unquantized formats have no alignment requirements
+        F32 | F16 => target,
         // K-quants and I-quants require 256 alignment
         Q2_K | Q3_K_S | Q3_K_M | Q3_K_L | Q4_K_S | Q4_K_M | Q5_K_S | Q5_K_M | Q6_K | IQ1_S
         | IQ1_M | IQ2_XXS | IQ2_XS | IQ2_S | IQ3_XXS | IQ3_S | IQ4_XS | IQ4_NL => {
@@ -129,7 +131,7 @@ pub fn select_quant_with_fallback(cols: usize, target: GgufQuantType) -> GgufQua
             } else if cols.is_multiple_of(32) {
                 Q8_0 // Fall back to legacy format
             } else {
-                panic!("tensor cols must be multiple of 32")
+                F16 // Fall back to F16 for unaligned tensors
             }
         }
         // Legacy formats require 32 alignment
@@ -137,7 +139,7 @@ pub fn select_quant_with_fallback(cols: usize, target: GgufQuantType) -> GgufQua
             if cols.is_multiple_of(32) {
                 target
             } else {
-                panic!("tensor cols must be multiple of 32")
+                F16 // Fall back to F16 for unaligned tensors
             }
         }
     }

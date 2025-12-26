@@ -36,6 +36,10 @@ pub fn quantize_to_gguf(
     let gmat_block_size = all_blocks.first().map(|b| b.size()).unwrap_or(8);
 
     let data = match actual_type {
+        // Unquantized formats (no alignment requirements)
+        GgufQuantType::F32 => encode_f32(matrix),
+        GgufQuantType::F16 => encode_f16(matrix),
+
         // Legacy formats (32-element blocks)
         GgufQuantType::Q8_0 => quantize_legacy_blocks(
             &all_blocks,
@@ -267,4 +271,36 @@ pub fn compute_tensor_importance(matrix: &GraphMatrix) -> f32 {
     }
 
     total_shifted as f32 / total_nnz as f32
+}
+
+/// Encode GMAT matrix to F32 (unquantized).
+fn encode_f32(matrix: &GraphMatrix) -> Vec<u8> {
+    let (rows, cols) = matrix.shape();
+    let mut data = vec![0u8; rows * cols * 4];
+
+    for row_idx in 0..rows {
+        let row_offset = row_idx * cols * 4;
+        for (col_idx, val) in matrix.row_iter(row_idx) {
+            let offset = row_offset + col_idx * 4;
+            data[offset..offset + 4].copy_from_slice(&val.to_le_bytes());
+        }
+    }
+
+    data
+}
+
+/// Encode GMAT matrix to F16 (unquantized).
+fn encode_f16(matrix: &GraphMatrix) -> Vec<u8> {
+    let (rows, cols) = matrix.shape();
+    let mut data = vec![0u8; rows * cols * 2];
+
+    for row_idx in 0..rows {
+        let row_offset = row_idx * cols * 2;
+        for (col_idx, val) in matrix.row_iter(row_idx) {
+            let offset = row_offset + col_idx * 2;
+            data[offset..offset + 2].copy_from_slice(&f16::from_f32(val).to_le_bytes());
+        }
+    }
+
+    data
 }

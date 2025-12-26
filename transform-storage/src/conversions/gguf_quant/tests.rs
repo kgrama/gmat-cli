@@ -23,15 +23,20 @@ fn test_dimension_fallback() {
 }
 
 #[test]
-#[should_panic(expected = "must be multiple of 32")]
-fn test_dimension_fallback_invalid() {
-    select_quant_with_fallback(100, GgufQuantType::Q4_K_M);
-}
-
-#[test]
-#[should_panic(expected = "must be multiple of 32")]
-fn test_dimension_fallback_invalid_legacy() {
-    select_quant_with_fallback(17, GgufQuantType::Q8_0);
+fn test_dimension_fallback_to_f16() {
+    // Unaligned cols should fall back to F16 instead of panicking
+    assert_eq!(
+        select_quant_with_fallback(100, GgufQuantType::Q4_K_M),
+        GgufQuantType::F16
+    );
+    assert_eq!(
+        select_quant_with_fallback(17, GgufQuantType::Q8_0),
+        GgufQuantType::F16
+    );
+    assert_eq!(
+        select_quant_with_fallback(1, GgufQuantType::Q4_0),
+        GgufQuantType::F16
+    );
 }
 
 #[test]

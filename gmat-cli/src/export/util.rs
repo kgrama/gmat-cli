@@ -176,6 +176,8 @@ pub fn quant_type_to_gguf_tensor_type(
     use gguf_rs_lib::format::GGUFTensorType;
 
     match quant_type {
+        GgufQuantType::F32 => GGUFTensorType::F32,
+        GgufQuantType::F16 => GGUFTensorType::F16,
         GgufQuantType::Q4_0 => GGUFTensorType::Q4_0,
         GgufQuantType::Q4_1 => GGUFTensorType::Q4_1,
         GgufQuantType::Q5_0 => GGUFTensorType::Q5_0,

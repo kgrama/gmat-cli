@@ -6,6 +6,9 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum GgufQuantType {
+    // Unquantized (any alignment)
+    F32,
+    F16,
     // Legacy (block size = 32)
     Q4_0,
     Q4_1,
@@ -165,6 +168,7 @@ impl GgufQuantType {
     pub fn block_size(&self) -> usize {
         use GgufQuantType::*;
         match self {
+            F32 | F16 => 1, // No blocking for unquantized
             Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q8_0 => 32,
             _ => 256,
         }
@@ -174,6 +178,8 @@ impl GgufQuantType {
     pub fn block_bytes(&self) -> usize {
         use GgufQuantType::*;
         match self {
+            F32 => 4, // 4 bytes per element
+            F16 => 2, // 2 bytes per element
             Q4_0 => 2 + 16,                           // f16 scale + 16 nibbles
             Q4_1 => 2 + 2 + 16,                       // f16 scale + f16 min + 16 nibbles
             Q5_0 => 2 + 4 + 16,                       // f16 scale + 4B high + 16B low
