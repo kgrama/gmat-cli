@@ -6,6 +6,7 @@ mod common;
 mod config;
 mod export;
 mod import;
+mod tokens;
 mod workqueue;
 
 #[derive(Parser)]

@@ -2,54 +2,73 @@
   "target_format": "gguf",
   "quantization": {
     "default_type": "q4_k_m",
+    "scale_optimization": "trellis",
+    "trellis_lambda": 0.3,
     "per_tensor": {
-      "df11f72a-85ce-41e1-b354-1253749bd43d": "q8_0",
-      "8bc97abd-918e-4b33-9bb2-cc57761bfbc6": "q8_0",
-      "a8cb41d9-68ea-40ea-bd22-0b8af74af051": "q8_0",
-      "e268e395-888f-49ed-9f59-24ea9d10be77": "q6_k",
-      "d203496c-8b87-43ed-82c2-1e7bcc340944": "q8_0",
-      "926d821f-1509-483e-9fc2-dc7d5db8c9d0": "q8_0",
-      "3b6d6f4a-9cf5-4d97-9b08-ce07ddc0435d": "q6_k",
-      "99ff4033-4060-4b3a-b2ad-ec48d5abd1c0": "q8_0",
-      "cca2df3c-6b4c-4559-95ad-d0bbf71efec8": "q8_0"
+      "b8be8e9d-f689-4675-8dce-71ac2b6a682b": "f16",
+      "c004bc46-cc85-4c47-b816-609e2c136090": "q8_0",
+      "83405dcb-7b8f-4748-9418-09906c6f5a0f": "q8_0",
+      "f0f9f255-da2a-4bb7-ba7e-8ff71be9feba": "q8_0",
+      "dd348064-2065-482d-9029-92be67d130d3": "q8_0",
+      "a1798bf8-1404-46ad-8690-4ff90439720a": "f16",
+      "0242dfe2-2a83-4d32-8a9e-6c0e7f9bab32": "q8_0",
+      "10767de6-504d-4daa-8975-9d54f21fd761": "q8_0",
+      "5e00cf19-1374-4f7a-a092-1fb2196d1d76": "q8_0",
+      "a3903e3f-f894-434b-bd72-141df0b8a8ca": "q8_0",
+      "76f16b33-9dfd-48bd-9f6e-180ce708ad9b": "q8_0",
+      "64527a08-865f-4ea9-b4f8-46aba8959909": "f16"
     }
   },
   "tensor_map": [
     {
-      "source": "3b6d6f4a-9cf5-4d97-9b08-ce07ddc0435d",
+      "source": "5e00cf19-1374-4f7a-a092-1fb2196d1d76",
       "target": "output.weight"
     },
     {
-      "source": "e268e395-888f-49ed-9f59-24ea9d10be77",
+      "source": "0242dfe2-2a83-4d32-8a9e-6c0e7f9bab32",
       "target": "token_embd.weight"
     },
     {
-      "source": "99ff4033-4060-4b3a-b2ad-ec48d5abd1c0",
+      "source": "b8be8e9d-f689-4675-8dce-71ac2b6a682b",
+      "target": "blk.0.attn_norm.weight"
+    },
+    {
+      "source": "c004bc46-cc85-4c47-b816-609e2c136090",
       "target": "blk.0.ffn_down.weight"
     },
     {
-      "source": "8bc97abd-918e-4b33-9bb2-cc57761bfbc6",
+      "source": "83405dcb-7b8f-4748-9418-09906c6f5a0f",
       "target": "blk.0.ffn_gate.weight"
     },
     {
-      "source": "d203496c-8b87-43ed-82c2-1e7bcc340944",
+      "source": "f0f9f255-da2a-4bb7-ba7e-8ff71be9feba",
       "target": "blk.0.ffn_up.weight"
     },
     {
-      "source": "926d821f-1509-483e-9fc2-dc7d5db8c9d0",
+      "source": "a1798bf8-1404-46ad-8690-4ff90439720a",
+      "target": "blk.0.ffn_norm.weight"
+    },
+    {
+      "source": "10767de6-504d-4daa-8975-9d54f21fd761",
       "target": "blk.0.attn_k.weight"
     },
     {
-      "source": "a8cb41d9-68ea-40ea-bd22-0b8af74af051",
+      "source": "dd348064-2065-482d-9029-92be67d130d3",
       "target": "blk.0.attn_output.weight"
     },
     {
-      "source": "df11f72a-85ce-41e1-b354-1253749bd43d",
+      "source": "a3903e3f-f894-434b-bd72-141df0b8a8ca",
       "target": "blk.0.attn_q.weight"
     },
     {
-      "source": "cca2df3c-6b4c-4559-95ad-d0bbf71efec8",
+      "source": "76f16b33-9dfd-48bd-9f6e-180ce708ad9b",
       "target": "blk.0.attn_v.weight"
+    },
+    {
+      "source": "64527a08-865f-4ea9-b4f8-46aba8959909",
+      "target": "output_norm.weight"
     }
-  ]
+  ],
+  "shard_size": null,
+  "special_token_keys": {}
 }

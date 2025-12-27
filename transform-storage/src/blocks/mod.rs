@@ -1,6 +1,7 @@
 //! Block types for transform storage
 
 mod any_block;
+mod block;
 mod configs;
 mod traits;
 mod traversal;
@@ -39,3 +40,9 @@ pub use unified_block::UnifiedBlock as GenericBlock;
 
 // Legacy DualRowBlock re-export for compatibility
 pub use unified_block::DualRowBlock8x4 as DualRowBlock;
+
+// Re-export Block trait and encoding helpers
+pub use block::{
+    block_iter, decode_e0m4, decode_e1m7, encode_e0m4, encode_e1m7, encode_values,
+    get_packed_nibble, set_packed_nibble, Block, EncodedBlock, EMPTY_SCALE,
+};

@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use transform_storage::{BlockFormat, GmatMetadata, GraphMatrix};
 
 use crate::common::bytes_to_f32;
+use crate::common::runtime::run_blocking;
 use crate::config::import_config::ImportConfig;
 use crate::workqueue::{PipelineState, run_pipeline};
 
@@ -70,8 +71,7 @@ pub fn run_streaming_import(
     block_format: BlockFormat,
     total: usize,
 ) -> Result<Vec<SavedTensor>> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_streaming_import_async(
+    run_blocking(run_streaming_import_async(
         safetensor_files,
         tensor_map,
         tensors_dir,
@@ -360,11 +360,7 @@ fn build_tensor_metadata(
     meta
 }
 
-fn num_cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-}
+use crate::common::runtime::num_cpus;
 
 #[cfg(test)]
 mod tests {

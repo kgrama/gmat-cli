@@ -1,6 +1,6 @@
 //! Core traits for block encoding and element masking
 
-use crate::block::{decode_e0m4, decode_e1m7, encode_e0m4, encode_e1m7};
+use super::block::{decode_e0m4, decode_e1m7, encode_e0m4, encode_e1m7};
 use std::io::{Read, Result, Write};
 
 /// Trait for element count dependent types (u8 for 8 elements, u16 for 16 elements)

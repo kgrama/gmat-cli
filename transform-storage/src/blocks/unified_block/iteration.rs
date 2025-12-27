@@ -3,7 +3,7 @@
 use super::super::configs::BlockConfig;
 use super::super::traits::EncodingStrategy;
 use super::{EncodeHelper, UnifiedBlock};
-use crate::block::get_packed_nibble;
+use crate::blocks::block::get_packed_nibble;
 
 impl<const ROWS: usize, C: BlockConfig + EncodeHelper> UnifiedBlock<ROWS, C> {
     /// Iterator over non-zero elements in a specific row

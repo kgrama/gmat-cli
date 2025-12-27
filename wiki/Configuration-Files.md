@@ -148,7 +148,8 @@ flowchart TD
       "target": "output.weight"
     }
   ],
-  "shard_size": null
+  "shard_size": null,
+  "special_token_keys": {}
 }
 ```
 
@@ -159,7 +160,8 @@ flowchart TD
 | `target_format` | string | Yes | `"gguf"` | Target format (currently only `"gguf"` supported) |
 | `quantization` | object | Optional | `null` | Quantization settings (if omitted, no quantization applied) |
 | `tensor_map` | array | Yes | `[]` | Tensor export mappings (UUID → GGUF name) |
-| `shard_size` | integer/null | Optional | `null` | Shard size in bytes (null = single file) |
+| `shard_size` | integer/null | Optional | `null` | Shard size in bytes (null = single file). Note: CLI `--shard-size` uses MB. |
+| `special_token_keys` | object | Optional | `{}` | Special token type to GGUF key mapping overrides (see [Special Token Mapping](#special-token-mapping)) |
 
 #### Quantization Configuration
 
@@ -183,13 +185,57 @@ See [Export Command - Quantization Types](Export-Command.md#quantization-types) 
 
 #### Sharding Configuration
 
-| Value | Description |
-|-------|-------------|
-| `null` | Single GGUF file (recommended for models <10GB) |
-| `5000000000` | 5GB shards (recommended for cloud storage, ~70B models) |
-| `8000000000` | 8GB shards (balanced option for large models) |
+Config file uses **bytes**, CLI uses **megabytes**:
+
+| Config Value (bytes) | CLI Value (MB) | Description |
+|---------------------|----------------|-------------|
+| `null` | - | Single GGUF file (recommended for models <10GB) |
+| `5000000000` | `5000` | 5GB shards (recommended for cloud storage, ~70B models) |
+| `8000000000` | `8000` | 8GB shards (balanced option for large models) |
 
 Output files named as: `model-00001-of-00005.gguf`, `model-00002-of-00005.gguf`, etc.
+
+#### Special Token Mapping
+
+The `special_token_keys` field allows customizing how special token types from the tokenizer are mapped to GGUF metadata keys. This is useful for:
+
+- Adding support for new model architectures with custom special tokens
+- Disabling specific special token exports
+- Overriding default GGUF key names
+
+**Default mappings** (applied automatically):
+
+| Token Type | GGUF Metadata Key |
+|------------|-------------------|
+| `bos` | `tokenizer.ggml.bos_token_id` |
+| `eos` | `tokenizer.ggml.eos_token_id` |
+| `unk` | `tokenizer.ggml.unknown_token_id` |
+| `pad` | `tokenizer.ggml.padding_token_id` |
+| `sep` | `tokenizer.ggml.seperator_token_id` |
+| `cls` | `tokenizer.ggml.cls_token_id` |
+| `mask` | `tokenizer.ggml.mask_token_id` |
+| `eot` | `tokenizer.ggml.eot_token_id` |
+
+**Override examples**:
+
+```json
+{
+  "special_token_keys": {
+    "fim_prefix": "tokenizer.ggml.fim_prefix_token_id",
+    "fim_middle": "tokenizer.ggml.fim_middle_token_id",
+    "fim_suffix": "tokenizer.ggml.fim_suffix_token_id",
+    "pad": ""
+  }
+}
+```
+
+| Action | How to Configure |
+|--------|------------------|
+| Add new special token | `"token_type": "tokenizer.ggml.custom_key"` |
+| Disable a default token | `"token_type": ""` (empty string) |
+| Override default key | `"bos": "tokenizer.ggml.custom_bos_id"` |
+
+**Note**: Token types are normalized by stripping `_token` suffix. So `bos_token` and `bos` both map to the same key.
 
 ---
 
@@ -498,7 +544,8 @@ Use `--generate-config` to auto-populate `tensor_map` arrays.
       "target": "output_norm.weight"
     }
   ],
-  "shard_size": null
+  "shard_size": null,
+  "special_token_keys": {}
 }
 ```
 
@@ -636,6 +683,7 @@ Available block formats for import configuration:
 | `Shard size too small: 1000000` | Shard size <100MB | Use null or >=1GB (1000000000) |
 | `Invalid scale_optimization: fast` | Unknown optimization mode | Use `"trellis"` or `"standard"` |
 | `per_tensor must be object, got array` | Wrong type for per_tensor | Use object: `{"uuid": "q8_0"}`, not array |
+| `special_token_keys must be object` | Wrong type for special_token_keys | Use object: `{"token_type": "gguf_key"}` |
 
 ### GMAT Metadata Errors
 

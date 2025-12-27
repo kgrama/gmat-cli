@@ -9,6 +9,7 @@ use gguf_rs_lib::format::MetadataValue;
 use std::path::{Path, PathBuf};
 use transform_storage::conversions::gguf_quant::GgufQuantizedData;
 
+use super::token_metadata::TokenMetadata;
 use super::util::quant_type_to_gguf_tensor_type;
 
 /// Quantized tensor ready for GGUF output.
@@ -36,6 +37,7 @@ pub enum ShardResult {
 pub struct GgufStreamWriter {
     builder: GGUFBuilder,
     model_meta: GgufModelMetadata,
+    token_meta: Option<TokenMetadata>,
     output_file: String,
     max_shard_size: Option<u64>,
 
@@ -54,13 +56,15 @@ impl GgufStreamWriter {
         metadata: &serde_json::Value,
         output_file: &str,
         max_shard_size: Option<u64>,
+        token_meta: Option<TokenMetadata>,
     ) -> Self {
         let model_meta = GgufModelMetadata::from_json(metadata);
-        let builder = new_builder_with_metadata(&model_meta);
+        let builder = new_builder_with_metadata(&model_meta, token_meta.as_ref());
 
         Self {
             builder,
             model_meta,
+            token_meta,
             output_file: output_file.to_string(),
             max_shard_size,
             shard_index: 0,
@@ -107,7 +111,7 @@ impl GgufStreamWriter {
 
         let result = std::mem::replace(
             &mut self.builder,
-            new_builder_with_metadata(&self.model_meta),
+            new_builder_with_metadata(&self.model_meta, self.token_meta.as_ref()),
         )
         .build_to_file(&shard_file)
         .map_err(|e| anyhow::anyhow!("Failed to write shard {}: {}", self.shard_index, e))?;
@@ -186,6 +190,9 @@ struct GgufModelMetadata {
     max_position_embeddings: Option<u64>,
     rms_norm_eps: Option<f64>,
     rope_theta: Option<f64>,
+    // MoE fields
+    num_experts: Option<u64>,
+    num_experts_per_tok: Option<u64>,
 }
 
 impl GgufModelMetadata {
@@ -238,6 +245,10 @@ impl GgufModelMetadata {
                 .or_else(|| get_num("n_positions")),
             rms_norm_eps: get_f64("rms_norm_eps").or_else(|| get_f64("layer_norm_epsilon")),
             rope_theta: get_f64("rope_theta"),
+            // MoE fields
+            num_experts: get_num("num_local_experts").or_else(|| get_num("num_experts")),
+            num_experts_per_tok: get_num("num_experts_per_tok")
+                .or_else(|| get_num("num_selected_experts")),
         }
     }
 }
@@ -256,7 +267,10 @@ fn normalize_architecture(arch: &str) -> String {
 }
 
 /// Create a new GGUF builder with full model metadata.
-fn new_builder_with_metadata(model_meta: &GgufModelMetadata) -> GGUFBuilder {
+fn new_builder_with_metadata(
+    model_meta: &GgufModelMetadata,
+    token_meta: Option<&TokenMetadata>,
+) -> GGUFBuilder {
     let mut builder = GGUFBuilder::new();
 
     let arch = model_meta.architecture.as_deref().unwrap_or("llama");
@@ -322,6 +336,29 @@ fn new_builder_with_metadata(model_meta: &GgufModelMetadata) -> GGUFBuilder {
             format!("{}.rope.freq_base", arch),
             MetadataValue::F32(v as f32),
         );
+    }
+
+    // MoE metadata
+    if let Some(v) = model_meta.num_experts {
+        builder = builder.add_metadata(
+            format!("{}.expert_count", arch),
+            MetadataValue::U32(v as u32),
+        );
+    }
+    if let Some(v) = model_meta.num_experts_per_tok {
+        builder = builder.add_metadata(
+            format!("{}.expert_used_count", arch),
+            MetadataValue::U32(v as u32),
+        );
+    }
+
+    // Tokenizer metadata
+    if let Some(token_meta) = token_meta
+        && let Ok(token_metadata) = token_meta.to_gguf_metadata()
+    {
+        for (key, value) in token_metadata {
+            builder = builder.add_metadata(key, value);
+        }
     }
 
     builder
@@ -441,7 +478,7 @@ mod tests {
     #[test]
     fn test_new_builder_with_no_metadata() {
         let meta = GgufModelMetadata::default();
-        let builder = new_builder_with_metadata(&meta);
+        let builder = new_builder_with_metadata(&meta, None);
         // Just verify it doesn't panic and returns a builder
         let _ = builder;
     }
@@ -452,7 +489,7 @@ mod tests {
             architecture: Some("llama".to_string()),
             ..Default::default()
         };
-        let builder = new_builder_with_metadata(&meta);
+        let builder = new_builder_with_metadata(&meta, None);
         let _ = builder;
     }
 
@@ -462,7 +499,7 @@ mod tests {
             name: Some("my-model".to_string()),
             ..Default::default()
         };
-        let builder = new_builder_with_metadata(&meta);
+        let builder = new_builder_with_metadata(&meta, None);
         let _ = builder;
     }
 
@@ -473,7 +510,7 @@ mod tests {
             name: Some("Llama-7B".to_string()),
             ..Default::default()
         };
-        let builder = new_builder_with_metadata(&meta);
+        let builder = new_builder_with_metadata(&meta, None);
         let _ = builder;
     }
 
@@ -491,8 +528,10 @@ mod tests {
             max_position_embeddings: Some(4096),
             rms_norm_eps: Some(1e-5),
             rope_theta: Some(10000.0),
+            num_experts: None,
+            num_experts_per_tok: None,
         };
-        let builder = new_builder_with_metadata(&meta);
+        let builder = new_builder_with_metadata(&meta, None);
         let _ = builder;
     }
 
@@ -543,5 +582,40 @@ mod tests {
         assert_eq!(normalize_architecture("kimi_vl"), "llama");
         assert_eq!(normalize_architecture("deepseek_v2"), "deepseek2");
         assert_eq!(normalize_architecture("unknown_arch"), "unknown_arch");
+    }
+
+    #[test]
+    fn test_gguf_model_metadata_moe_fields() {
+        // Mixtral-style config
+        let json = serde_json::json!({
+            "model_type": "mixtral",
+            "num_local_experts": 8,
+            "num_experts_per_tok": 2
+        });
+        let meta = GgufModelMetadata::from_json(&json);
+        assert_eq!(meta.num_experts, Some(8));
+        assert_eq!(meta.num_experts_per_tok, Some(2));
+
+        // Qwen-style config (uses num_experts + num_selected_experts)
+        let json2 = serde_json::json!({
+            "model_type": "qwen2_moe",
+            "num_experts": 60,
+            "num_selected_experts": 4
+        });
+        let meta2 = GgufModelMetadata::from_json(&json2);
+        assert_eq!(meta2.num_experts, Some(60));
+        assert_eq!(meta2.num_experts_per_tok, Some(4));
+    }
+
+    #[test]
+    fn test_new_builder_with_moe_metadata() {
+        let meta = GgufModelMetadata {
+            architecture: Some("qwen2".to_string()),
+            num_experts: Some(64),
+            num_experts_per_tok: Some(8),
+            ..Default::default()
+        };
+        let builder = new_builder_with_metadata(&meta, None);
+        let _ = builder;
     }
 }

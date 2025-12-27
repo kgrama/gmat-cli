@@ -3,6 +3,7 @@
 //! Uses async pipeline with tokio-rayon for CPU-bound quantization.
 
 mod shard;
+mod token_metadata;
 mod util;
 mod validate;
 
@@ -18,6 +19,7 @@ use transform_storage::conversions::gguf_quant::{
     GgufQuantType, ScaleOptimization, compute_tensor_importance, quantize_to_gguf,
 };
 
+use crate::common::runtime::{ProgressTracker, run_blocking};
 use crate::workqueue::{PipelineState, run_pipeline};
 
 /// Represents a tensor entry from metadata - either simple 2D or N-D with planes.
@@ -141,6 +143,7 @@ use crate::common::{load_config, load_gmat_model};
 use crate::config::export_config::{ExportConfig, QuantizationConfig, TensorExportMapping};
 
 use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
+use token_metadata::TokenMetadata;
 use util::{
     ImportanceThresholds, num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name,
 };
@@ -187,10 +190,7 @@ fn analyze_model_tensors(
     tensors_dir: &std::path::Path,
     thresholds: &ImportanceThresholds,
 ) -> Vec<TensorAnalysis> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let total = tensor_entries.len();
-    let processed = AtomicUsize::new(0);
+    let progress = ProgressTracker::new(tensor_entries.len(), "Analyzed tensors");
 
     let results: Vec<TensorAnalysis> = tensor_entries
         .par_iter()
@@ -236,13 +236,7 @@ fn analyze_model_tensors(
             let gguf_name = safetensor_to_gguf_name(source_name);
             let quant_type = recommend_quant_type(source_name, importance, rows, cols, thresholds);
 
-            // Progress update
-            let count = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            if count.is_multiple_of(100) || count == total {
-                eprint!("\rAnalyzed {}/{} tensors...", count, total);
-                use std::io::Write;
-                let _ = std::io::stderr().flush();
-            }
+            progress.increment_every(100);
 
             Some(TensorAnalysis {
                 source_name: source_name.to_string(),
@@ -256,7 +250,7 @@ fn analyze_model_tensors(
         })
         .collect();
 
-    eprintln!(); // New line after progress
+    progress.finish();
     results
 }
 
@@ -373,6 +367,7 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
         }),
         tensor_map: tensor_mappings,
         shard_size: None,
+        special_token_keys: std::collections::HashMap::new(),
     };
 
     fs::write("export_config.json", serde_json::to_string_pretty(&config)?)?;
@@ -397,8 +392,7 @@ pub fn generate_config_template(
     importance_high: f32,
     importance_medium: f32,
 ) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(generate_config_template_async(
+    run_blocking(generate_config_template_async(
         model_path,
         importance_high,
         importance_medium,
@@ -539,9 +533,8 @@ pub fn run(
     output_path: Option<&str>,
     shard_size_override: Option<u64>,
 ) -> Result<()> {
-    // Build tokio runtime and run async pipeline
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(
+    // Run async pipeline
+    run_blocking(run_async(
         model_path,
         config_path,
         output_path,
@@ -636,6 +629,18 @@ async fn run_async(
     let total = jobs.len();
     println!("\nProcessing {} tensors...", total);
 
+    // Load tokenizer metadata if available
+    let token_meta = match TokenMetadata::load(&model_dir).await {
+        Ok(meta) => {
+            println!("Loaded tokenizer: {} tokens", meta.vocab_size());
+            Some(meta)
+        }
+        Err(e) => {
+            eprintln!("Warning: Could not load tokenizer: {}", e);
+            None
+        }
+    };
+
     let buffer_size = num_cpus().saturating_mul(2).max(4);
 
     // Capture values for closures
@@ -661,7 +666,7 @@ async fn run_async(
         },
         // Writer: stream-write to GGUF
         move |mut rx: mpsc::Receiver<Result<ProcessedTensor>>, state: Arc<PipelineState>| async move {
-            let mut writer = GgufStreamWriter::new(&metadata_for_writer, &output_file_for_writer, shard_size);
+            let mut writer = GgufStreamWriter::new(&metadata_for_writer, &output_file_for_writer, shard_size, token_meta);
 
             while let Some(result) = rx.recv().await {
                 let tensor = result?;

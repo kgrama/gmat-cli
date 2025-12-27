@@ -19,6 +19,12 @@ pub struct ExportConfig {
     /// Common values: 5GB = 5_000_000_000, 8GB = 8_000_000_000
     #[serde(default)]
     pub shard_size: Option<u64>,
+
+    /// Special token type to GGUF key mapping overrides.
+    /// Maps special_type (e.g., "bos") to GGUF metadata key (e.g., "tokenizer.ggml.bos_token_id").
+    /// Merges with defaults; set value to empty string to disable a mapping.
+    #[serde(default)]
+    pub special_token_keys: HashMap<String, String>,
 }
 
 /// Quantization configuration.
@@ -65,8 +71,23 @@ impl Default for ExportConfig {
             quantization: None,
             tensor_map: Vec::new(),
             shard_size: None,
+            special_token_keys: HashMap::new(),
         }
     }
+}
+
+/// Returns the default special token type to GGUF key mappings.
+pub fn default_special_token_keys() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    map.insert("bos".to_string(), "tokenizer.ggml.bos_token_id".to_string());
+    map.insert("eos".to_string(), "tokenizer.ggml.eos_token_id".to_string());
+    map.insert("unk".to_string(), "tokenizer.ggml.unknown_token_id".to_string());
+    map.insert("pad".to_string(), "tokenizer.ggml.padding_token_id".to_string());
+    map.insert("sep".to_string(), "tokenizer.ggml.seperator_token_id".to_string()); // typo matches llama.cpp
+    map.insert("cls".to_string(), "tokenizer.ggml.cls_token_id".to_string());
+    map.insert("mask".to_string(), "tokenizer.ggml.mask_token_id".to_string());
+    map.insert("eot".to_string(), "tokenizer.ggml.eot_token_id".to_string());
+    map
 }
 
 impl Default for QuantizationConfig {
@@ -93,6 +114,7 @@ mod tests {
         assert!(config.quantization.is_none());
         assert!(config.tensor_map.is_empty());
         assert!(config.shard_size.is_none());
+        assert!(config.special_token_keys.is_empty());
     }
 
     #[test]
@@ -105,6 +127,7 @@ mod tests {
                 target: "blk.0.attn_q.weight".to_string(),
             }],
             shard_size: Some(5_000_000_000),
+            special_token_keys: HashMap::new(),
         };
 
         let json = serde_json::to_string(&config).unwrap();

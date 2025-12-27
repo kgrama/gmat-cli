@@ -475,7 +475,7 @@ impl AnyBlock {
         signs: u16,
         offsets: &[f32],
     ) -> Self {
-        use crate::block::set_packed_nibble;
+        use super::block::set_packed_nibble;
 
         if zero_map == 0 {
             return Self::new_empty(format);
