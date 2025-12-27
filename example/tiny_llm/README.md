@@ -8,24 +8,23 @@ This example demonstrates GMAT's core workflow: **one source model, multiple dep
 tiny_llm/
 ├── hf-model/                   # Source: HuggingFace model
 │   ├── tiny_llm.safetensors
-│   └── config.json             # Model config (auto-read for metadata)
+│   ├── config.json             # Model config (auto-read for metadata)
+│   ├── tokenizer.json          # Tokenizer vocabulary
+│   └── tokenizer_config.json   # Special token definitions
 │
 ├── import_config.json          # Import settings: tensor mappings, block format
 │
 ├── model.gmat/                 # GMAT format: tensor-addressed storage
 │   ├── metadata.json           # Model metadata + tensor UUID mappings
+│   ├── tokens.bin              # Tokenizer vocabulary (binary format)
 │   └── tensors/                # Individual tensor files (UUID-named)
 │       ├── 3b6d6f4a-....gmat
 │       └── ...
 │
 └── export/                     # Export profiles and outputs
-    ├── export-economy.json     # Profile: aggressive Q4, smallest size
     ├── export-balanced.json    # Profile: Q4 default, critical tensors Q6-Q8
-    ├── export-premium.json     # Profile: Q8 throughout, highest quality
     └── gguf/                   # Output: production-ready GGUF files
-        ├── tiny_llm-economy.gguf
-        ├── tiny_llm-balanced.gguf
-        └── tiny_llm-premium.gguf
+        └── tiny_llm-balanced.gguf
 ```
 
 ## The Workflow
@@ -48,28 +47,26 @@ Result: `model.gmat/` with individual tensor files.
 
 ### Step 2: Create Export Profiles
 
-The same GMAT source supports multiple quantization profiles:
+Generate an export config with automatic importance analysis:
 
-| Profile | Default | Embeddings | Use Case |
-|---------|---------|------------|----------|
-| `export-economy.json` | Q4_0 | Q4_K_M | Cost-sensitive, edge devices |
-| `export-balanced.json` | Q4_K_M | Q6_K | Production default |
-| `export-premium.json` | Q8_0 | Q8_0 | Quality-critical applications |
+```bash
+gmat export --model model.gmat --generate-config
+mv export_config.json export/export-balanced.json
+```
 
 ### Step 3: Export to GGUF
 
-Generate deployment artifacts from your chosen profile:
+Generate deployment artifacts with tokenizer metadata embedded:
 
 ```bash
-# Economy tier
-gmat export --model model.gmat --config export/export-economy.json -o export/gguf/tiny_llm-economy.gguf
-
-# Balanced tier
 gmat export --model model.gmat --config export/export-balanced.json -o export/gguf/tiny_llm-balanced.gguf
-
-# Premium tier
-gmat export --model model.gmat --config export/export-premium.json -o export/gguf/tiny_llm-premium.gguf
 ```
+
+The export process:
+- Loads tensors from GMAT storage
+- Loads tokenizer from `tokens.bin`
+- Quantizes tensors according to config
+- Writes GGUF with tokenizer metadata (tokens, scores, special token IDs)
 
 ## Key Concepts Illustrated
 
@@ -98,23 +95,21 @@ Export configs are small JSON files that define:
 
 ### 3. Per-Tensor Precision
 
-Compare the profiles:
+Export config allows per-tensor quantization overrides:
 
 ```json
-// export/export-economy.json - aggressive compression
-"default_type": "q4_0",
-"per_tensor": {
-  "e268e395-...": "q4_k_m",  // embeddings: slightly better than default
-  "3b6d6f4a-...": "q4_k_m"   // output: slightly better than default
-}
-
-// export/export-premium.json - maximum quality
-"default_type": "q8_0",
-"per_tensor": {
-  "e268e395-...": "q8_0",    // embeddings: full precision
-  "3b6d6f4a-...": "q8_0"     // output: full precision
+{
+  "quantization": {
+    "default_type": "q4_k_m",
+    "per_tensor": {
+      "<embed-uuid>": "q8_0",  // embeddings: higher precision
+      "<output-uuid>": "q8_0"  // output: higher precision
+    }
+  }
 }
 ```
+
+The `--generate-config` command analyzes tensor importance and automatically assigns quantization types.
 
 ### 4. Metadata Auto-Population
 
@@ -130,6 +125,17 @@ The `hf-model/config.json` file (HuggingFace format) is automatically read durin
 
 This metadata flows into `import_config.json` and `model.gmat/metadata.json`.
 
+### 5. Tokenizer Flow
+
+Tokenizer files are automatically parsed during import:
+- `tokenizer_config.json` → special token mappings (bos, eos, unk, pad)
+- `tokenizer.json` → vocabulary and tokenizer type (BPE, Unigram, etc.)
+
+The tokenizer data is:
+1. Stored as `model.gmat/tokens.bin` during import
+2. Loaded and embedded into GGUF metadata during export
+3. Configurable via `special_token_keys` in export config for custom mappings
+
 ## Try It
 
 ```bash
@@ -142,11 +148,13 @@ rm -rf model.gmat export/gguf/*.gguf import_config.json
 gmat import --model hf-model/tiny_llm.safetensors --generate-config
 gmat import --model hf-model/tiny_llm.safetensors --config import_config.json -o .
 
-# Generate all three deployment tiers
-gmat export --model model.gmat --config export/export-economy.json -o export/gguf/tiny_llm-economy.gguf
-gmat export --model model.gmat --config export/export-balanced.json -o export/gguf/tiny_llm-balanced.gguf
-gmat export --model model.gmat --config export/export-premium.json -o export/gguf/tiny_llm-premium.gguf
+# Generate export config
+gmat export --model model.gmat --generate-config
+mv export_config.json export/export-balanced.json
 
-# Compare sizes
+# Export to GGUF
+gmat export --model model.gmat --config export/export-balanced.json -o export/gguf/tiny_llm-balanced.gguf
+
+# Check output
 ls -la export/gguf/*.gguf
 ```

@@ -3,63 +3,63 @@
   "block_format": "B8x8",
   "tensor_map": [
     {
-      "source": "model.norm.weight",
-      "target": "ad8e7993-3b5a-483b-8598-a3a18fca38de",
-      "include": true
-    },
-    {
-      "source": "model.layers.0.self_attn.k_proj.weight",
-      "target": "889ded45-cfb4-44c4-a087-93c0ec8e568c",
-      "include": true
-    },
-    {
-      "source": "model.embed_tokens.weight",
-      "target": "b4cbdb15-b93a-43c3-8847-e6a63eb6278a",
-      "include": true
-    },
-    {
-      "source": "model.layers.0.input_layernorm.weight",
-      "target": "74ff6cd9-097d-476b-b4c4-99ca3492b09f",
-      "include": true
-    },
-    {
-      "source": "model.layers.0.mlp.gate_proj.weight",
-      "target": "46b276e6-10d0-4b0f-9b05-8db3134674cc",
-      "include": true
-    },
-    {
-      "source": "lm_head.weight",
-      "target": "59fb8fc5-865a-4c26-a25e-542dd4e025e2",
+      "source": "model.layers.0.self_attn.v_proj.weight",
+      "target": "76f16b33-9dfd-48bd-9f6e-180ce708ad9b",
       "include": true
     },
     {
       "source": "model.layers.0.self_attn.o_proj.weight",
-      "target": "b4859618-2789-4015-adff-b5f907a0f1df",
-      "include": true
-    },
-    {
-      "source": "model.layers.0.mlp.down_proj.weight",
-      "target": "34ad9e43-6499-4fd1-b766-384f5fbc658e",
-      "include": true
-    },
-    {
-      "source": "model.layers.0.self_attn.q_proj.weight",
-      "target": "fd012b84-f699-464c-8175-3ef65efbeed8",
+      "target": "dd348064-2065-482d-9029-92be67d130d3",
       "include": true
     },
     {
       "source": "model.layers.0.post_attention_layernorm.weight",
-      "target": "24aea7b4-d02c-4e91-8d55-798512e6f580",
+      "target": "a1798bf8-1404-46ad-8690-4ff90439720a",
       "include": true
     },
     {
-      "source": "model.layers.0.self_attn.v_proj.weight",
-      "target": "736bc083-cb09-4bc7-ae8c-7204e41c376d",
+      "source": "model.layers.0.mlp.down_proj.weight",
+      "target": "c004bc46-cc85-4c47-b816-609e2c136090",
+      "include": true
+    },
+    {
+      "source": "model.embed_tokens.weight",
+      "target": "0242dfe2-2a83-4d32-8a9e-6c0e7f9bab32",
       "include": true
     },
     {
       "source": "model.layers.0.mlp.up_proj.weight",
-      "target": "fb8559e2-f33f-411b-b4cc-02d5750ca8f1",
+      "target": "f0f9f255-da2a-4bb7-ba7e-8ff71be9feba",
+      "include": true
+    },
+    {
+      "source": "model.norm.weight",
+      "target": "64527a08-865f-4ea9-b4f8-46aba8959909",
+      "include": true
+    },
+    {
+      "source": "lm_head.weight",
+      "target": "5e00cf19-1374-4f7a-a092-1fb2196d1d76",
+      "include": true
+    },
+    {
+      "source": "model.layers.0.mlp.gate_proj.weight",
+      "target": "83405dcb-7b8f-4748-9418-09906c6f5a0f",
+      "include": true
+    },
+    {
+      "source": "model.layers.0.self_attn.q_proj.weight",
+      "target": "a3903e3f-f894-434b-bd72-141df0b8a8ca",
+      "include": true
+    },
+    {
+      "source": "model.layers.0.input_layernorm.weight",
+      "target": "b8be8e9d-f689-4675-8dce-71ac2b6a682b",
+      "include": true
+    },
+    {
+      "source": "model.layers.0.self_attn.k_proj.weight",
+      "target": "10767de6-504d-4daa-8975-9d54f21fd761",
       "include": true
     }
   ],

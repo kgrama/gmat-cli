@@ -375,6 +375,7 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
         }),
         tensor_map: tensor_mappings,
         shard_size: None,
+        special_token_keys: std::collections::HashMap::new(),
     };
 
     fs::write("export_config.json", serde_json::to_string_pretty(&config)?)?;

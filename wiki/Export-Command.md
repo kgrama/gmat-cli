@@ -67,7 +67,7 @@ gmat export [OPTIONS]
 | `--model <PATH>` | `-m` | Path to GMAT model directory (required) | - |
 | `--config <PATH>` | `-c` | Path to export configuration JSON | `export_config.json` |
 | `--output <PATH>` | `-o` | Output GGUF file path | `model.gguf` |
-| `--shard-size <BYTES>` | | Shard size in bytes (e.g., 5000000000 for 5GB). Overrides config. | None |
+| `--shard-size <MB>` | | Shard size in megabytes (e.g., 5000 for 5GB). Overrides config. | None |
 | `--generate-config` | | Generate export_config.json template and exit | - |
 | `--importance-high <FLOAT>` | | Importance threshold for high-quality quant (with --generate-config) | 0.2 |
 | `--importance-medium <FLOAT>` | | Importance threshold for medium-quality quant (with --generate-config) | 0.1 |
@@ -208,7 +208,7 @@ Sharding splits large GGUF files into multiple shards for easier distribution an
 gmat export --model ./model.gmat \
   --config export_config.json \
   --output model.gguf \
-  --shard-size 5000000000  # 5GB per shard
+  --shard-size 5000  # 5000 MB = 5GB per shard
 ```
 
 **Via configuration file:**

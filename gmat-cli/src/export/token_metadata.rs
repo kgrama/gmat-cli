@@ -4,8 +4,10 @@
 
 use anyhow::{Context, Result};
 use gguf_rs_lib::format::{GGUFValueType, MetadataArray, MetadataValue};
+use std::collections::HashMap;
 use std::path::Path;
 
+use crate::config::export_config::default_special_token_keys;
 use crate::tokens::{load_token_tree, TokenEntry, TokenIdTree, TokenizerType};
 
 /// GGUF token type constants (matches llama.cpp LLAMA_TOKEN_TYPE_*).
@@ -49,15 +51,8 @@ pub struct TokenMetadata {
     pub scores: Vec<f32>,
     /// Token types (Normal, Control, etc.).
     pub token_types: Vec<u32>,
-    /// Special token IDs.
-    pub bos_id: Option<u32>,
-    pub eos_id: Option<u32>,
-    pub unk_id: Option<u32>,
-    pub pad_id: Option<u32>,
-    pub sep_id: Option<u32>,
-    pub cls_id: Option<u32>,
-    pub mask_id: Option<u32>,
-    pub eot_id: Option<u32>,
+    /// Special token IDs mapped by their type (e.g., "bos" -> row).
+    pub special_token_ids: HashMap<String, u32>,
 }
 
 impl TokenMetadata {
@@ -89,35 +84,20 @@ impl TokenMetadata {
             token_types.push(GgufTokenType::from_entry(entry) as u32);
         }
 
-        // Extract special token IDs using special_tokens()
-        let mut bos_id = None;
-        let mut eos_id = None;
-        let mut unk_id = None;
-        let mut pad_id = None;
-        let mut sep_id = None;
-        let mut cls_id = None;
-        let mut mask_id = None;
-        let mut eot_id = None;
-
+        // Extract special token IDs from the tree
+        let mut special_token_ids = HashMap::new();
         for entry in tree.special_tokens() {
-            let row = entry.embedding_row;
-            match entry.special_type.as_str() {
-                "bos" | "bos_token" => bos_id = Some(row),
-                "eos" | "eos_token" => eos_id = Some(row),
-                "unk" | "unk_token" => unk_id = Some(row),
-                "pad" | "pad_token" => pad_id = Some(row),
-                "sep" | "sep_token" => sep_id = Some(row),
-                "cls" | "cls_token" => cls_id = Some(row),
-                "mask" | "mask_token" => mask_id = Some(row),
-                "eot" | "eot_token" => eot_id = Some(row),
-                _ => {}
+            if !entry.special_type.is_empty() {
+                // Normalize: strip "_token" suffix if present
+                let key = entry.special_type.trim_end_matches("_token").to_string();
+                special_token_ids.insert(key, entry.embedding_row);
             }
         }
 
         // Map tokenizer type to GGUF model name
         let model = match tree.tokenizer_type {
-            TokenizerType::Bpe => "gpt2",      // BPE uses gpt2 model
-            TokenizerType::Unigram => "llama", // Unigram uses llama model
+            TokenizerType::Bpe => "gpt2",
+            TokenizerType::Unigram => "llama",
             TokenizerType::WordPiece => "bert",
             TokenizerType::WordLevel => "gpt2",
             TokenizerType::Tiktoken => "gpt2",
@@ -128,21 +108,24 @@ impl TokenMetadata {
             tokens,
             scores,
             token_types,
-            bos_id,
-            eos_id,
-            unk_id,
-            pad_id,
-            sep_id,
-            cls_id,
-            mask_id,
-            eot_id,
+            special_token_ids,
         }
     }
 
     /// Add tokenizer metadata to a GGUF builder.
     ///
-    /// Returns a Vec of (key, value) pairs to add to the builder.
+    /// Uses default special token key mappings. For custom mappings, use `to_gguf_metadata_with_keys`.
     pub fn to_gguf_metadata(&self) -> Result<Vec<(String, MetadataValue)>> {
+        self.to_gguf_metadata_with_keys(&HashMap::new())
+    }
+
+    /// Add tokenizer metadata to a GGUF builder with custom special token key mappings.
+    ///
+    /// The `overrides` map is merged with defaults - use empty string value to disable a mapping.
+    pub fn to_gguf_metadata_with_keys(
+        &self,
+        overrides: &HashMap<String, String>,
+    ) -> Result<Vec<(String, MetadataValue)>> {
         let mut metadata = Vec::new();
 
         // Tokenizer model type
@@ -187,54 +170,19 @@ impl TokenMetadata {
             MetadataValue::Array(Box::new(types_array)),
         ));
 
-        // Special token IDs
-        if let Some(id) = self.bos_id {
-            metadata.push((
-                "tokenizer.ggml.bos_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
+        // Build effective key mapping: defaults + overrides
+        let mut key_map = default_special_token_keys();
+        for (k, v) in overrides {
+            key_map.insert(k.clone(), v.clone());
         }
-        if let Some(id) = self.eos_id {
-            metadata.push((
-                "tokenizer.ggml.eos_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
-        }
-        if let Some(id) = self.unk_id {
-            metadata.push((
-                "tokenizer.ggml.unknown_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
-        }
-        if let Some(id) = self.pad_id {
-            metadata.push((
-                "tokenizer.ggml.padding_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
-        }
-        if let Some(id) = self.sep_id {
-            metadata.push((
-                "tokenizer.ggml.seperator_token_id".to_string(), // Note: typo matches llama.cpp
-                MetadataValue::U32(id),
-            ));
-        }
-        if let Some(id) = self.cls_id {
-            metadata.push((
-                "tokenizer.ggml.cls_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
-        }
-        if let Some(id) = self.mask_id {
-            metadata.push((
-                "tokenizer.ggml.mask_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
-        }
-        if let Some(id) = self.eot_id {
-            metadata.push((
-                "tokenizer.ggml.eot_token_id".to_string(),
-                MetadataValue::U32(id),
-            ));
+
+        // Add special token IDs using the key mapping
+        for (token_type, id) in &self.special_token_ids {
+            if let Some(gguf_key) = key_map.get(token_type) {
+                if !gguf_key.is_empty() {
+                    metadata.push((gguf_key.clone(), MetadataValue::U32(*id)));
+                }
+            }
         }
 
         Ok(metadata)
@@ -252,10 +200,12 @@ mod tests {
     use crate::tokens::{SourceFormat, TokenizerType};
 
     fn make_test_tree() -> TokenIdTree {
-        // Build a simple test tree
+        // Build a simple test tree using right field directly
         let world = TokenEntry::new(2u32, "world".to_string(), 2);
-        let hello = TokenEntry::new(1u32, "hello".to_string(), 1).with_next(world);
-        let bos = TokenEntry::special(0u32, "<s>".to_string(), 0, "bos").with_next(hello);
+        let mut hello = TokenEntry::new(1u32, "hello".to_string(), 1);
+        hello.right = Some(Box::new(world));
+        let mut bos = TokenEntry::special(0u32, "<s>".to_string(), 0, "bos");
+        bos.right = Some(Box::new(hello));
 
         TokenIdTree::new(SourceFormat::HuggingFace, TokenizerType::Bpe, bos)
     }
@@ -268,7 +218,7 @@ mod tests {
         assert_eq!(meta.vocab_size(), 3);
         assert_eq!(meta.model, "gpt2");
         assert_eq!(meta.tokens, vec!["<s>", "hello", "world"]);
-        assert_eq!(meta.bos_id, Some(0));
+        assert_eq!(meta.special_token_ids.get("bos"), Some(&0));
     }
 
     #[test]
