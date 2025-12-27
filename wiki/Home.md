@@ -114,6 +114,7 @@ Follow these guides in order:
 - [Block format comparison](Technical-Details.md#block-encoding)
 - [Quantization quality/speed tradeoffs](Export-Command.md#quantization-types)
 - [Hardware recommendations](Technical-Details.md#hardware-requirements)
+- [LLM-friendly reference](machine_talk.md) - Token-minimized guide for AI assistants
 
 ---
 

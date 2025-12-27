@@ -85,15 +85,32 @@ This separation enables:
 
 ---
 
-## Supported Architectures
+## Supported Models
 
-GMAT-CLI supports a wide range of model architectures:
+### Top Open-Source Base Models
+
+| Model | HuggingFace ID | Parameters | Status |
+|-------|----------------|------------|--------|
+| **Llama 3.3** | `meta-llama/Llama-3.3-70B` | 70B | ✅ Supported* |
+| **Qwen3** | `Qwen/Qwen3-235B-A22B` | 235B (22B active) | ✅ Supported* |
+| **Qwen2** | `Qwen/Qwen2-72B` | 72B | ✅ Supported* |
+| **DeepSeek-V3** | `deepseek-ai/DeepSeek-V3` | 671B (37B active) | ✅ Supported* |
+| **DeepSeek-Coder-V2** | `deepseek-ai/DeepSeek-Coder-V2` | 236B (21B active) | ✅ Supported* |
+| **Mixtral 8x22B** | `mistralai/Mixtral-8x22B-v0.1` | 141B (44B active) | ✅ Supported* |
+| **Mistral** | `mistralai/Mistral-7B-v0.3` | 7B | ✅ Supported* |
+| **Gemma 2** | `google/gemma-2-27b` | 27B | ✅ Supported* |
+| **MiniMax-M2** | `MiniMaxAI/MiniMax-M2` | 230B (10B active) | ✅ Supported* |
+| **MiniMax-M2.1** | `MiniMaxAI/MiniMax-M2.1` | 230B (10B active) | ✅ Supported* |
+
+*\* Architecture supported but not yet validated with full end-to-end testing.*
+
+### Supported Architectures
 
 | Category | Architectures |
 |----------|---------------|
-| **Text Models** | Llama, Qwen, Phi, Gemma, DeepSeek, Mistral, Mixtral (MoE) |
-| **Vision-Language** | LLaVA, Qwen-VL, Kimi-VL, InternVL |
-| **Encoder-Decoder** | T5, BART, Whisper |
+| **Text Models** | Llama, Qwen, Phi, Gemma, DeepSeek, Mistral, Mixtral (MoE), MiniMax |
+| **Vision-Language** | LLaVA, Qwen-VL, Kimi-VL, InternVL* |
+| **Encoder-Decoder** | T5, BART, Whisper* |
 
 ### Quantization Types
 
@@ -137,6 +154,7 @@ Full documentation is available in the [wiki](wiki/Home.md):
 - [Configuration Files](wiki/Configuration-Files.md) - JSON config schema and examples
 - [Technical Details](wiki/Technical-Details.md) - Block encoding and quantization algorithms
 - [FAQ](wiki/FAQ.md) - Common questions and troubleshooting
+- [LLM Reference](wiki/machine_talk.md) - Token-minimized guide for AI assistants
 
 ---
 
