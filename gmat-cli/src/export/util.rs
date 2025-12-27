@@ -1,120 +1,12 @@
-//! Export utility functions - name mapping, quantization recommendations, type conversions.
+//! Export utility functions - quantization recommendations, type conversions.
+//!
+//! Note: Tensor name mapping has been moved to tensor_overrides.rs
+//! which loads patterns from JSON files in export-overrides/tensor-names/
 
 use anyhow::Result;
 use transform_storage::conversions::gguf_quant::GgufQuantType;
 
-/// Convert SafeTensor name to GGUF tensor name (llama.cpp convention).
-pub fn safetensor_to_gguf_name(st_name: &str) -> String {
-    // Handle token embeddings
-    if st_name == "model.embed_tokens.weight" {
-        return "token_embd.weight".to_string();
-    }
-
-    // Handle output layer and norm
-    if st_name == "lm_head.weight" {
-        return "output.weight".to_string();
-    }
-    if st_name == "model.norm.weight" {
-        return "output_norm.weight".to_string();
-    }
-
-    // Handle layer-specific tensors
-    if let Some(rest) = st_name.strip_prefix("model.layers.") {
-        // Extract layer number
-        if let Some(dot_pos) = rest.find('.') {
-            let layer_num = &rest[..dot_pos];
-            let tensor_type = &rest[dot_pos + 1..];
-
-            // Try MoE expert patterns first (more specific)
-            if let Some(gguf_name) = map_moe_tensor(layer_num, tensor_type) {
-                return gguf_name;
-            }
-
-            // Map dense tensor types
-            let gguf_type = match tensor_type {
-                "self_attn.q_proj.weight" => "attn_q.weight",
-                "self_attn.k_proj.weight" => "attn_k.weight",
-                "self_attn.v_proj.weight" => "attn_v.weight",
-                "self_attn.o_proj.weight" => "attn_output.weight",
-                "mlp.gate_proj.weight" => "ffn_gate.weight",
-                "mlp.up_proj.weight" => "ffn_up.weight",
-                "mlp.down_proj.weight" => "ffn_down.weight",
-                "input_layernorm.weight" => "attn_norm.weight",
-                "post_attention_layernorm.weight" => "ffn_norm.weight",
-                _ => tensor_type,
-            };
-
-            return format!("blk.{}.{}", layer_num, gguf_type);
-        }
-    }
-
-    // Fallback: use original name if no mapping found
-    st_name.to_string()
-}
-
-/// Map MoE-specific tensor names to GGUF format.
-/// Returns None if not an MoE tensor pattern.
-fn map_moe_tensor(layer_num: &str, tensor_type: &str) -> Option<String> {
-    // MoE router (expert gate/selector)
-    // Patterns: mlp.gate.weight, block_sparse_moe.gate.weight
-    if tensor_type == "mlp.gate.weight" || tensor_type == "block_sparse_moe.gate.weight" {
-        return Some(format!("blk.{}.ffn_gate_inp.weight", layer_num));
-    }
-
-    // Shared experts (DeepSeek/Qwen style)
-    // Pattern: mlp.shared_experts.{gate,up,down}_proj.weight
-    if let Some(proj) = tensor_type.strip_prefix("mlp.shared_experts.") {
-        let gguf_suffix = match proj {
-            "gate_proj.weight" => "ffn_gate_shexp.weight",
-            "up_proj.weight" => "ffn_up_shexp.weight",
-            "down_proj.weight" => "ffn_down_shexp.weight",
-            _ => return None,
-        };
-        return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
-    }
-
-    // Expert weights - Qwen/DeepSeek style
-    // Pattern: mlp.experts.{j}.{gate,up,down}_proj.weight
-    if let Some((expert_idx, proj)) = tensor_type
-        .strip_prefix("mlp.experts.")
-        .and_then(parse_expert_index)
-    {
-        let gguf_suffix = match proj {
-            "gate_proj.weight" => format!("ffn_gate.{}.weight", expert_idx),
-            "up_proj.weight" => format!("ffn_up.{}.weight", expert_idx),
-            "down_proj.weight" => format!("ffn_down.{}.weight", expert_idx),
-            _ => return None,
-        };
-        return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
-    }
-
-    // Expert weights - Mixtral style
-    // Pattern: block_sparse_moe.experts.{j}.w1/w2/w3.weight
-    if let Some((expert_idx, proj)) = tensor_type
-        .strip_prefix("block_sparse_moe.experts.")
-        .and_then(parse_expert_index)
-    {
-        let gguf_suffix = match proj {
-            "w1.weight" => format!("ffn_gate.{}.weight", expert_idx),
-            "w2.weight" => format!("ffn_down.{}.weight", expert_idx),
-            "w3.weight" => format!("ffn_up.{}.weight", expert_idx),
-            _ => return None,
-        };
-        return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
-    }
-
-    None
-}
-
-/// Parse expert index from pattern like "0.gate_proj.weight" or "15.w1.weight"
-/// Returns (expert_index, remaining_projection_part)
-fn parse_expert_index(s: &str) -> Option<(usize, &str)> {
-    let dot_pos = s.find('.')?;
-    let idx_str = &s[..dot_pos];
-    let rest = &s[dot_pos + 1..];
-    let idx = idx_str.parse::<usize>().ok()?;
-    Some((idx, rest))
-}
+use super::tensor_overrides::TensorNameOverrides;
 
 /// Default importance thresholds for quantization decisions.
 /// Importance is measured as octave-shift ratio (0-1 range).
@@ -148,9 +40,8 @@ impl ImportanceThresholds {
 ///
 /// Uses heuristics:
 /// - Unaligned cols (not divisible by 32) → F16 (fallback)
-/// - High-importance tensors (embeddings, attention output) → Q6_K
-/// - Standard tensors → Q4_K_M
 /// - Small tensors (<1M params) → Q8_0
+/// - Pattern-based recommendations from JSON override files
 ///
 /// Importance thresholds (octave-shift ratio):
 /// - HIGH (default 0.2): ~4× average, significant dynamic range
@@ -161,6 +52,7 @@ pub fn recommend_quant_type(
     rows: usize,
     cols: usize,
     thresholds: &ImportanceThresholds,
+    overrides: &TensorNameOverrides,
 ) -> String {
     // Unaligned columns: must use F16 (1D biases, vision tensors, etc.)
     if !cols.is_multiple_of(32) {
@@ -174,54 +66,9 @@ pub fn recommend_quant_type(
         return "q8_0".to_string();
     }
 
-    // Check tensor type patterns
-    let name_lower = tensor_name.to_lowercase();
-
-    // Token embeddings and output layers: highest quality
-    if name_lower.contains("embed_tokens")
-        || name_lower.contains("lm_head")
-        || name_lower.contains("model.norm")
-    {
-        return if importance > thresholds.high {
-            "q8_0"
-        } else {
-            "q6_k"
-        }
-        .to_string();
-    }
-
-    // Attention output and value: sensitive to quantization
-    if name_lower.contains("attn.o_proj") || name_lower.contains("attn.v_proj") {
-        return if importance > thresholds.medium {
-            "q6_k"
-        } else {
-            "q5_k_m"
-        }
-        .to_string();
-    }
-
-    // FFN down projection: output path, more sensitive
-    if name_lower.contains("mlp.down_proj") {
-        return if importance > thresholds.medium {
-            "q6_k"
-        } else {
-            "q5_k_m"
-        }
-        .to_string();
-    }
-
-    // Attention Q/K: can tolerate more compression
-    if name_lower.contains("attn.q_proj") || name_lower.contains("attn.k_proj") {
-        return "q4_k_m".to_string();
-    }
-
-    // FFN gate and up: large, compressible
-    if name_lower.contains("mlp.gate_proj") || name_lower.contains("mlp.up_proj") {
-        return "q4_k_m".to_string();
-    }
-
-    // Default: Q4_K_M for standard tensors
-    "q4_k_m".to_string()
+    // Use JSON-driven pattern matching for recommendations
+    let is_high_importance = importance > thresholds.high;
+    overrides.recommend_quant(tensor_name, is_high_importance).to_string()
 }
 
 /// Parse quantization type string to GgufQuantType enum.
@@ -289,190 +136,28 @@ pub use crate::common::runtime::num_cpus;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ==================== safetensor_to_gguf_name tests ====================
-
-    #[test]
-    fn test_embed_tokens_mapping() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.embed_tokens.weight"),
-            "token_embd.weight"
-        );
-    }
-
-    #[test]
-    fn test_lm_head_mapping() {
-        assert_eq!(safetensor_to_gguf_name("lm_head.weight"), "output.weight");
-    }
-
-    #[test]
-    fn test_model_norm_mapping() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.norm.weight"),
-            "output_norm.weight"
-        );
-    }
-
-    #[test]
-    fn test_attention_projections() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.self_attn.q_proj.weight"),
-            "blk.0.attn_q.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.5.self_attn.k_proj.weight"),
-            "blk.5.attn_k.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.31.self_attn.v_proj.weight"),
-            "blk.31.attn_v.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.self_attn.o_proj.weight"),
-            "blk.0.attn_output.weight"
-        );
-    }
-
-    #[test]
-    fn test_mlp_projections() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.gate_proj.weight"),
-            "blk.0.ffn_gate.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.up_proj.weight"),
-            "blk.0.ffn_up.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.down_proj.weight"),
-            "blk.0.ffn_down.weight"
-        );
-    }
-
-    #[test]
-    fn test_layer_norms() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.input_layernorm.weight"),
-            "blk.0.attn_norm.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.post_attention_layernorm.weight"),
-            "blk.0.ffn_norm.weight"
-        );
-    }
-
-    #[test]
-    fn test_unknown_tensor_passthrough() {
-        assert_eq!(
-            safetensor_to_gguf_name("some.unknown.tensor"),
-            "some.unknown.tensor"
-        );
-    }
-
-    #[test]
-    fn test_unknown_layer_tensor_passthrough() {
-        // Unknown tensor type within a layer should pass through
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.some_new_thing.weight"),
-            "blk.0.some_new_thing.weight"
-        );
-    }
-
-    // ==================== MoE tensor mapping tests ====================
-
-    #[test]
-    fn test_moe_router_qwen_style() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.gate.weight"),
-            "blk.0.ffn_gate_inp.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.15.mlp.gate.weight"),
-            "blk.15.ffn_gate_inp.weight"
-        );
-    }
-
-    #[test]
-    fn test_moe_router_mixtral_style() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.gate.weight"),
-            "blk.0.ffn_gate_inp.weight"
-        );
-    }
-
-    #[test]
-    fn test_moe_experts_qwen_style() {
-        // Expert 0
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.experts.0.gate_proj.weight"),
-            "blk.0.ffn_gate.0.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.experts.0.up_proj.weight"),
-            "blk.0.ffn_up.0.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.experts.0.down_proj.weight"),
-            "blk.0.ffn_down.0.weight"
-        );
-        // Expert 63 (high index)
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.5.mlp.experts.63.gate_proj.weight"),
-            "blk.5.ffn_gate.63.weight"
-        );
-    }
-
-    #[test]
-    fn test_moe_experts_mixtral_style() {
-        // w1 -> ffn_gate, w2 -> ffn_down, w3 -> ffn_up
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.experts.0.w1.weight"),
-            "blk.0.ffn_gate.0.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.experts.0.w2.weight"),
-            "blk.0.ffn_down.0.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.block_sparse_moe.experts.0.w3.weight"),
-            "blk.0.ffn_up.0.weight"
-        );
-        // Expert 7
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.31.block_sparse_moe.experts.7.w1.weight"),
-            "blk.31.ffn_gate.7.weight"
-        );
-    }
-
-    #[test]
-    fn test_moe_shared_experts() {
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.shared_experts.gate_proj.weight"),
-            "blk.0.ffn_gate_shexp.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.shared_experts.up_proj.weight"),
-            "blk.0.ffn_up_shexp.weight"
-        );
-        assert_eq!(
-            safetensor_to_gguf_name("model.layers.0.mlp.shared_experts.down_proj.weight"),
-            "blk.0.ffn_down_shexp.weight"
-        );
-    }
+    use std::path::Path;
 
     // ==================== recommend_quant_type tests ====================
+    // Note: safetensor_to_gguf_name tests are now in tensor_overrides.rs
+    // Note: Pattern-based quant recommendation tests are in tensor_overrides.rs
+
+    fn get_overrides() -> TensorNameOverrides {
+        TensorNameOverrides::from_file(Path::new("../export-overrides/models/llama.json")).unwrap()
+    }
 
     #[test]
     fn test_unaligned_cols_gets_f16() {
         let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
         // 1D bias tensor: cols=1 (not 32-aligned) -> f16
         assert_eq!(
-            recommend_quant_type("router.bias", 0.5, 64, 1, &thresholds),
+            recommend_quant_type("router.bias", 0.5, 64, 1, &thresholds, &overrides),
             "f16"
         );
         // Vision tensor: cols=17 (not 32-aligned) -> f16
         assert_eq!(
-            recommend_quant_type("vision.proj", 0.5, 100, 17, &thresholds),
+            recommend_quant_type("vision.proj", 0.5, 100, 17, &thresholds, &overrides),
             "f16"
         );
     }
@@ -480,9 +165,10 @@ mod tests {
     #[test]
     fn test_small_tensor_gets_q8_0() {
         let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
         // Under 1M params should get Q8_0 (500 rows * 1024 cols = 512K)
         assert_eq!(
-            recommend_quant_type("any.tensor", 0.5, 500, 1024, &thresholds),
+            recommend_quant_type("any.tensor", 0.5, 500, 1024, &thresholds, &overrides),
             "q8_0"
         );
     }
@@ -490,9 +176,10 @@ mod tests {
     #[test]
     fn test_embed_tokens_high_importance() {
         let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
         // Above high threshold (0.2) -> q8_0 (1000 rows * 2048 cols = ~2M)
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.25, 1000, 2048, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.25, 1000, 2048, &thresholds, &overrides),
             "q8_0"
         );
     }
@@ -500,9 +187,10 @@ mod tests {
     #[test]
     fn test_embed_tokens_lower_importance() {
         let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
         // Below high threshold (0.2) -> q6_k
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.15, 1000, 2048, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.15, 1000, 2048, &thresholds, &overrides),
             "q6_k"
         );
     }
@@ -510,132 +198,39 @@ mod tests {
     #[test]
     fn test_lm_head_high_importance() {
         let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
         // Above high threshold (0.2) -> q8_0
         assert_eq!(
-            recommend_quant_type("lm_head.weight", 0.25, 1000, 2048, &thresholds),
+            recommend_quant_type("lm_head.weight", 0.25, 1000, 2048, &thresholds, &overrides),
             "q8_0"
         );
     }
 
     #[test]
-    fn test_attention_output_high_importance() {
+    fn test_large_tensor_uses_json_patterns() {
         let thresholds = ImportanceThresholds::default();
-        // Above medium threshold (0.1) -> q6_k
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.self_attn.o_proj.weight",
-                0.15,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q6_k"
-        );
-    }
-
-    #[test]
-    fn test_attention_output_lower_importance() {
-        let thresholds = ImportanceThresholds::default();
-        // Below medium threshold (0.1) -> q5_k_m
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.self_attn.o_proj.weight",
-                0.05,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q5_k_m"
-        );
-    }
-
-    #[test]
-    fn test_attention_qk_gets_q4_k_m() {
-        let thresholds = ImportanceThresholds::default();
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.self_attn.q_proj.weight",
-                0.5,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q4_k_m"
-        );
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.self_attn.k_proj.weight",
-                0.5,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q4_k_m"
-        );
-    }
-
-    #[test]
-    fn test_mlp_gate_up_gets_q4_k_m() {
-        let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
+        // Large tensors use JSON-driven pattern matching
+        // Gate proj -> q4_k_m (from JSON)
         assert_eq!(
             recommend_quant_type(
                 "model.layers.0.mlp.gate_proj.weight",
                 0.5,
                 1000,
                 2048,
-                &thresholds
+                &thresholds,
+                &overrides
             ),
             "q4_k_m"
-        );
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.mlp.up_proj.weight",
-                0.5,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q4_k_m"
-        );
-    }
-
-    #[test]
-    fn test_mlp_down_high_importance() {
-        let thresholds = ImportanceThresholds::default();
-        // Above medium threshold (0.1) -> q6_k
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.mlp.down_proj.weight",
-                0.15,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q6_k"
-        );
-    }
-
-    #[test]
-    fn test_mlp_down_lower_importance() {
-        let thresholds = ImportanceThresholds::default();
-        // Below medium threshold (0.1) -> q5_k_m
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.mlp.down_proj.weight",
-                0.05,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q5_k_m"
         );
     }
 
     #[test]
     fn test_default_tensor_gets_q4_k_m() {
         let thresholds = ImportanceThresholds::default();
+        let overrides = get_overrides();
         assert_eq!(
-            recommend_quant_type("some.random.tensor", 0.5, 1000, 2048, &thresholds),
+            recommend_quant_type("some.random.tensor", 0.5, 1000, 2048, &thresholds, &overrides),
             "q4_k_m"
         );
     }
@@ -644,29 +239,18 @@ mod tests {
     fn test_custom_thresholds() {
         // Custom thresholds: high=0.5, medium=0.3
         let thresholds = ImportanceThresholds::new(0.5, 0.3);
+        let overrides = get_overrides();
 
         // 0.4 is below custom high (0.5), so gets q6_k not q8_0
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.4, 1000, 2048, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.4, 1000, 2048, &thresholds, &overrides),
             "q6_k"
         );
 
         // 0.6 is above custom high (0.5), so gets q8_0
         assert_eq!(
-            recommend_quant_type("model.embed_tokens.weight", 0.6, 1000, 2048, &thresholds),
+            recommend_quant_type("model.embed_tokens.weight", 0.6, 1000, 2048, &thresholds, &overrides),
             "q8_0"
-        );
-
-        // 0.2 is below custom medium (0.3), so gets q5_k_m
-        assert_eq!(
-            recommend_quant_type(
-                "model.layers.0.self_attn.o_proj.weight",
-                0.2,
-                1000,
-                2048,
-                &thresholds
-            ),
-            "q5_k_m"
         );
     }
 

@@ -1,0 +1,15 @@
+{
+  "_comment": "Gemma 2 tensor name mappings. Extra layernorms for sandwich norm architecture.",
+  "gguf_architecture": "gemma2",
+  "architecture_aliases": ["gemma", "gemma2", "gemma-2"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id"
+  },
+  "tensor_map_patterns": {
+    "model.layers.{N}.pre_feedforward_layernorm.weight": "blk.{N}.ffn_norm.weight",
+    "model.layers.{N}.post_feedforward_layernorm.weight": "blk.{N}.ffn_post_norm.weight"
+  }
+}

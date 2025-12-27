@@ -3,6 +3,7 @@
 //! Uses async pipeline with tokio-rayon for CPU-bound quantization.
 
 mod shard;
+mod tensor_overrides;
 mod token_metadata;
 mod util;
 mod validate;
@@ -140,13 +141,12 @@ fn find_tensor_entry(
 }
 
 use crate::common::{load_config, load_gmat_model};
-use crate::config::export_config::{ExportConfig, QuantizationConfig, TensorExportMapping};
+use crate::config::export_config::{ExportConfig, GgufMetadataValues, QuantizationConfig, TensorExportMapping};
 
 use shard::{GgufStreamWriter, ProcessedTensor, ShardResult};
+use tensor_overrides::TensorNameOverrides;
 use token_metadata::TokenMetadata;
-use util::{
-    ImportanceThresholds, num_cpus, parse_quant_type, recommend_quant_type, safetensor_to_gguf_name,
-};
+use util::{ImportanceThresholds, num_cpus, parse_quant_type, recommend_quant_type};
 
 pub use validate::validate_gguf;
 
@@ -189,6 +189,7 @@ fn analyze_model_tensors(
     tensor_entries: Vec<(&String, &serde_json::Value)>,
     tensors_dir: &std::path::Path,
     thresholds: &ImportanceThresholds,
+    overrides: &TensorNameOverrides,
 ) -> Vec<TensorAnalysis> {
     let progress = ProgressTracker::new(tensor_entries.len(), "Analyzed tensors");
 
@@ -233,8 +234,8 @@ fn analyze_model_tensors(
             let importance = compute_tensor_importance(&matrix);
             let (rows, cols) = shape;
 
-            let gguf_name = safetensor_to_gguf_name(source_name);
-            let quant_type = recommend_quant_type(source_name, importance, rows, cols, thresholds);
+            let gguf_name = overrides.map_name(source_name).unwrap_or_else(|| source_name.to_string());
+            let quant_type = recommend_quant_type(source_name, importance, rows, cols, thresholds, overrides);
 
             progress.increment_every(100);
 
@@ -340,8 +341,84 @@ impl ExportTensorStats {
     }
 }
 
+/// Extract GGUF metadata from model metadata.json using key aliases.
+fn extract_gguf_metadata(
+    metadata: &serde_json::Value,
+    overrides: &TensorNameOverrides,
+) -> GgufMetadataValues {
+    // Nested config keys for VLMs (same as import)
+    const NESTED_KEYS: &[&str] = &["text_config", "language_config", "llm_config"];
+
+    let text_cfg = NESTED_KEYS
+        .iter()
+        .find_map(|key| metadata.get(*key))
+        .filter(|v| v.is_object());
+
+    // Helper to get number using metadata key aliases from JSON overrides
+    let get_num_with_aliases = |canonical: &str| -> Option<u64> {
+        if let Some(aliases) = overrides.metadata_key_aliases(canonical) {
+            for alias in aliases {
+                let val = text_cfg
+                    .and_then(|cfg| cfg.get(alias))
+                    .or_else(|| metadata.get(alias))
+                    .and_then(|v| v.as_u64());
+                if val.is_some() {
+                    return val;
+                }
+            }
+        }
+        // Fallback to canonical key
+        text_cfg
+            .and_then(|cfg| cfg.get(canonical))
+            .or_else(|| metadata.get(canonical))
+            .and_then(|v| v.as_u64())
+    };
+
+    let get_f64_with_aliases = |canonical: &str| -> Option<f64> {
+        if let Some(aliases) = overrides.metadata_key_aliases(canonical) {
+            for alias in aliases {
+                let val = text_cfg
+                    .and_then(|cfg| cfg.get(alias))
+                    .or_else(|| metadata.get(alias))
+                    .and_then(|v| v.as_f64());
+                if val.is_some() {
+                    return val;
+                }
+            }
+        }
+        // Fallback to canonical key
+        text_cfg
+            .and_then(|cfg| cfg.get(canonical))
+            .or_else(|| metadata.get(canonical))
+            .and_then(|v| v.as_f64())
+    };
+
+    GgufMetadataValues {
+        name: metadata.get("name").and_then(|v| v.as_str()).map(String::from),
+        vocab_size: metadata
+            .get("vocab_size")
+            .and_then(|v| v.as_u64())
+            .or_else(|| text_cfg.and_then(|cfg| cfg.get("vocab_size")).and_then(|v| v.as_u64())),
+        hidden_size: get_num_with_aliases("hidden_size"),
+        num_layers: get_num_with_aliases("num_layers"),
+        num_attention_heads: get_num_with_aliases("num_attention_heads"),
+        num_key_value_heads: get_num_with_aliases("num_key_value_heads"),
+        intermediate_size: get_num_with_aliases("intermediate_size"),
+        max_position_embeddings: get_num_with_aliases("max_position_embeddings"),
+        rms_norm_eps: get_f64_with_aliases("rms_norm_eps"),
+        rope_theta: get_f64_with_aliases("rope_theta"),
+        num_experts: get_num_with_aliases("num_experts"),
+        num_experts_per_tok: get_num_with_aliases("num_experts_per_tok"),
+    }
+}
+
 /// Build export config from tensor analyses and write to file.
-fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Result<()> {
+fn build_and_write_config(
+    analyses: Vec<TensorAnalysis>,
+    model_path: &str,
+    overrides: &TensorNameOverrides,
+    metadata: &serde_json::Value,
+) -> Result<()> {
     let mut tensor_mappings = Vec::with_capacity(analyses.len());
     let mut per_tensor_quant = HashMap::with_capacity(analyses.len());
 
@@ -357,8 +434,13 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
     let stats = ExportTensorStats::from_analyses(&analyses);
     stats.print_summary();
 
+    // Extract pre-resolved metadata values
+    let gguf_metadata = extract_gguf_metadata(metadata, overrides);
+
     let config = ExportConfig {
         target_format: "gguf".to_string(),
+        gguf_architecture: overrides.gguf_architecture().to_string(),
+        gguf_metadata,
         quantization: Some(QuantizationConfig {
             default_type: "q4_k_m".to_string(),
             scale_optimization: "trellis".to_string(),
@@ -367,7 +449,7 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
         }),
         tensor_map: tensor_mappings,
         shard_size: None,
-        special_token_keys: std::collections::HashMap::new(),
+        special_token_keys: overrides.special_token_keys().clone(),
     };
 
     fs::write("export_config.json", serde_json::to_string_pretty(&config)?)?;
@@ -387,15 +469,18 @@ fn build_and_write_config(analyses: Vec<TensorAnalysis>, model_path: &str) -> Re
 /// Generate an export config template from a GMAT model.
 ///
 /// Uses tokio-rayon for parallel tensor analysis.
+/// The model_config parameter is REQUIRED - path to model config JSON.
 pub fn generate_config_template(
     model_path: &str,
     importance_high: f32,
     importance_medium: f32,
+    model_config: &str,
 ) -> Result<()> {
     run_blocking(generate_config_template_async(
         model_path,
         importance_high,
         importance_medium,
+        model_config,
     ))
 }
 
@@ -404,6 +489,7 @@ async fn generate_config_template_async(
     model_path: &str,
     importance_high: f32,
     importance_medium: f32,
+    model_config: &str,
 ) -> Result<()> {
     use std::time::Instant;
 
@@ -413,6 +499,11 @@ async fn generate_config_template_async(
     let tensor_map = metadata["tensor_name_map"]
         .as_object()
         .context("tensor_name_map not found in metadata.json")?;
+
+    // Load tensor name overrides from required model config file
+    let overrides = TensorNameOverrides::from_file(std::path::Path::new(model_config))
+        .context("Failed to load model config")?;
+    println!("Using model config: {} (architecture: {})", model_config, overrides.gguf_architecture());
 
     let thresholds = ImportanceThresholds::new(importance_high, importance_medium);
     println!(
@@ -431,17 +522,20 @@ async fn generate_config_template_async(
         .collect();
 
     // Run CPU-bound tensor analysis on rayon pool
+    // Load overrides again for analysis (will be used in closure)
+    let overrides_for_analysis = TensorNameOverrides::from_file(std::path::Path::new(model_config))
+        .context("Failed to reload model config")?;
     let analysis_start = Instant::now();
     let analyses = tokio_rayon::spawn(move || {
         let entries_ref: Vec<(&String, &serde_json::Value)> =
             tensor_entries.iter().map(|(k, v)| (k, v)).collect();
-        analyze_model_tensors(entries_ref, &tensors_dir, &thresholds)
+        analyze_model_tensors(entries_ref, &tensors_dir, &thresholds, &overrides_for_analysis)
     })
     .await;
     let analysis_elapsed = analysis_start.elapsed();
 
-    // Build and write config
-    let result = build_and_write_config(analyses, model_path);
+    // Build and write config with overrides and metadata for gguf_metadata extraction
+    let result = build_and_write_config(analyses, model_path, &overrides, &metadata);
 
     let total_elapsed = start_time.elapsed();
 
@@ -643,8 +737,10 @@ async fn run_async(
 
     let buffer_size = num_cpus().saturating_mul(2).max(4);
 
-    // Capture values for closures
-    let metadata_for_writer = metadata.clone();
+    // Capture values for closures - use pre-resolved config values
+    let gguf_metadata = config.gguf_metadata.clone();
+    let gguf_architecture = config.gguf_architecture.clone();
+    let special_token_keys = config.special_token_keys.clone();
     let output_file_for_writer = output_file.clone();
 
     run_pipeline::<QuantizeJob, ProcessedTensor, anyhow::Error, _, _, _, _, _>(
@@ -664,9 +760,16 @@ async fn run_async(
         move |job: QuantizeJob| -> Result<ProcessedTensor> {
             quantize_tensor_job(job, scale_opt)
         },
-        // Writer: stream-write to GGUF
+        // Writer: stream-write to GGUF using pre-resolved config values
         move |mut rx: mpsc::Receiver<Result<ProcessedTensor>>, state: Arc<PipelineState>| async move {
-            let mut writer = GgufStreamWriter::new(&metadata_for_writer, &output_file_for_writer, shard_size, token_meta);
+            let mut writer = GgufStreamWriter::new(
+                &gguf_metadata,
+                &output_file_for_writer,
+                shard_size,
+                token_meta,
+                &gguf_architecture,
+                &special_token_keys,
+            );
 
             while let Some(result) = rx.recv().await {
                 let tensor = result?;

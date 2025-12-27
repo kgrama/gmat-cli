@@ -1,0 +1,13 @@
+{
+  "_comment": "DeepSeek V2/V3 tensor name mappings. MoE with shared experts.",
+  "gguf_architecture": "deepseek2",
+  "architecture_aliases": ["deepseek", "deepseek2", "deepseek_v2", "deepseek_v3"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id",
+    "eot": "tokenizer.ggml.eot_token_id"
+  },
+  "tensor_map_patterns": {}
+}

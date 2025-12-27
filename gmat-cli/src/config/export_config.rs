@@ -3,11 +3,37 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Pre-resolved GGUF metadata values.
+/// All values are already extracted from the model metadata using key aliases.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GgufMetadataValues {
+    pub name: Option<String>,
+    pub vocab_size: Option<u64>,
+    pub hidden_size: Option<u64>,
+    pub num_layers: Option<u64>,
+    pub num_attention_heads: Option<u64>,
+    pub num_key_value_heads: Option<u64>,
+    pub intermediate_size: Option<u64>,
+    pub max_position_embeddings: Option<u64>,
+    pub rms_norm_eps: Option<f64>,
+    pub rope_theta: Option<f64>,
+    pub num_experts: Option<u64>,
+    pub num_experts_per_tok: Option<u64>,
+}
+
 /// Configuration for exporting a GMAT model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportConfig {
     /// Target format: "gguf" or "safetensors"
     pub target_format: String,
+
+    /// GGUF architecture name for `general.architecture` metadata
+    #[serde(default)]
+    pub gguf_architecture: String,
+
+    /// Pre-resolved GGUF metadata values
+    #[serde(default)]
+    pub gguf_metadata: GgufMetadataValues,
 
     /// Quantization settings (optional)
     pub quantization: Option<QuantizationConfig>,
@@ -20,9 +46,8 @@ pub struct ExportConfig {
     #[serde(default)]
     pub shard_size: Option<u64>,
 
-    /// Special token type to GGUF key mapping overrides.
+    /// Special token type to GGUF key mapping.
     /// Maps special_type (e.g., "bos") to GGUF metadata key (e.g., "tokenizer.ggml.bos_token_id").
-    /// Merges with defaults; set value to empty string to disable a mapping.
     #[serde(default)]
     pub special_token_keys: HashMap<String, String>,
 }
@@ -68,26 +93,14 @@ impl Default for ExportConfig {
     fn default() -> Self {
         Self {
             target_format: "gguf".to_string(),
+            gguf_architecture: "llama".to_string(),
+            gguf_metadata: GgufMetadataValues::default(),
             quantization: None,
             tensor_map: Vec::new(),
             shard_size: None,
             special_token_keys: HashMap::new(),
         }
     }
-}
-
-/// Returns the default special token type to GGUF key mappings.
-pub fn default_special_token_keys() -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    map.insert("bos".to_string(), "tokenizer.ggml.bos_token_id".to_string());
-    map.insert("eos".to_string(), "tokenizer.ggml.eos_token_id".to_string());
-    map.insert("unk".to_string(), "tokenizer.ggml.unknown_token_id".to_string());
-    map.insert("pad".to_string(), "tokenizer.ggml.padding_token_id".to_string());
-    map.insert("sep".to_string(), "tokenizer.ggml.seperator_token_id".to_string()); // typo matches llama.cpp
-    map.insert("cls".to_string(), "tokenizer.ggml.cls_token_id".to_string());
-    map.insert("mask".to_string(), "tokenizer.ggml.mask_token_id".to_string());
-    map.insert("eot".to_string(), "tokenizer.ggml.eot_token_id".to_string());
-    map
 }
 
 impl Default for QuantizationConfig {
@@ -111,6 +124,7 @@ mod tests {
     fn test_export_config_default() {
         let config = ExportConfig::default();
         assert_eq!(config.target_format, "gguf");
+        assert_eq!(config.gguf_architecture, "llama");
         assert!(config.quantization.is_none());
         assert!(config.tensor_map.is_empty());
         assert!(config.shard_size.is_none());
@@ -121,6 +135,8 @@ mod tests {
     fn test_export_config_serialization() {
         let config = ExportConfig {
             target_format: "gguf".to_string(),
+            gguf_architecture: "llama".to_string(),
+            gguf_metadata: GgufMetadataValues::default(),
             quantization: Some(QuantizationConfig::default()),
             tensor_map: vec![TensorExportMapping {
                 source: "uuid-1234".to_string(),
@@ -134,6 +150,7 @@ mod tests {
         let parsed: ExportConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.target_format, "gguf");
+        assert_eq!(parsed.gguf_architecture, "llama");
         assert!(parsed.quantization.is_some());
         assert_eq!(parsed.tensor_map.len(), 1);
         assert_eq!(parsed.shard_size, Some(5_000_000_000));

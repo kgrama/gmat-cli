@@ -1,0 +1,29 @@
+{
+  "_comment": "Kimi-VL tensor name mappings. VLM with MoE and MLA (Multi-head Latent Attention).",
+  "gguf_architecture": "llama",
+  "architecture_aliases": ["kimi", "kimi_vl", "kimi-vl"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id"
+  },
+  "tensor_map_patterns": {
+    "language_model.model.embed_tokens.weight": "token_embd.weight",
+    "language_model.lm_head.weight": "output.weight",
+    "language_model.model.norm.weight": "output_norm.weight",
+    "language_model.model.layers.{N}.input_layernorm.weight": "blk.{N}.attn_norm.weight",
+    "language_model.model.layers.{N}.post_attention_layernorm.weight": "blk.{N}.ffn_norm.weight",
+    "language_model.model.layers.{N}.self_attn.q_proj.weight": "blk.{N}.attn_q.weight",
+    "language_model.model.layers.{N}.self_attn.kv_a_proj_with_mqa.weight": "blk.{N}.attn_kv_a_mqa.weight",
+    "language_model.model.layers.{N}.self_attn.kv_a_layernorm.weight": "blk.{N}.attn_kv_a_norm.weight",
+    "language_model.model.layers.{N}.self_attn.kv_b_proj.weight": "blk.{N}.attn_kv_b.weight",
+    "language_model.model.layers.{N}.self_attn.o_proj.weight": "blk.{N}.attn_output.weight",
+    "language_model.model.layers.{N}.mlp.gate_proj.weight": "blk.{N}.ffn_gate.weight",
+    "language_model.model.layers.{N}.mlp.up_proj.weight": "blk.{N}.ffn_up.weight",
+    "language_model.model.layers.{N}.mlp.down_proj.weight": "blk.{N}.ffn_down.weight",
+    "language_model.model.layers.{N}.mlp.experts.{E}.gate_proj.weight": "blk.{N}.ffn_gate.{E}.weight",
+    "language_model.model.layers.{N}.mlp.experts.{E}.up_proj.weight": "blk.{N}.ffn_up.{E}.weight",
+    "language_model.model.layers.{N}.mlp.experts.{E}.down_proj.weight": "blk.{N}.ffn_down.{E}.weight"
+  }
+}

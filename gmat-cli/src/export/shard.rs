@@ -6,11 +6,13 @@
 use anyhow::Result;
 use gguf_rs_lib::builder::GGUFBuilder;
 use gguf_rs_lib::format::MetadataValue;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use transform_storage::conversions::gguf_quant::GgufQuantizedData;
 
 use super::token_metadata::TokenMetadata;
 use super::util::quant_type_to_gguf_tensor_type;
+use crate::config::export_config::GgufMetadataValues;
 
 /// Quantized tensor ready for GGUF output.
 pub struct ProcessedTensor {
@@ -36,7 +38,9 @@ pub enum ShardResult {
 /// For sharded mode, writes a new shard when current one exceeds max size.
 pub struct GgufStreamWriter {
     builder: GGUFBuilder,
-    model_meta: GgufModelMetadata,
+    gguf_metadata: GgufMetadataValues,
+    gguf_architecture: String,
+    special_token_keys: HashMap<String, String>,
     token_meta: Option<TokenMetadata>,
     output_file: String,
     max_shard_size: Option<u64>,
@@ -53,17 +57,25 @@ pub struct GgufStreamWriter {
 
 impl GgufStreamWriter {
     pub fn new(
-        metadata: &serde_json::Value,
+        gguf_metadata: &GgufMetadataValues,
         output_file: &str,
         max_shard_size: Option<u64>,
         token_meta: Option<TokenMetadata>,
+        gguf_architecture: &str,
+        special_token_keys: &HashMap<String, String>,
     ) -> Self {
-        let model_meta = GgufModelMetadata::from_json(metadata);
-        let builder = new_builder_with_metadata(&model_meta, token_meta.as_ref());
+        let builder = new_builder_with_metadata(
+            gguf_metadata,
+            token_meta.as_ref(),
+            gguf_architecture,
+            special_token_keys,
+        );
 
         Self {
             builder,
-            model_meta,
+            gguf_metadata: gguf_metadata.clone(),
+            gguf_architecture: gguf_architecture.to_string(),
+            special_token_keys: special_token_keys.clone(),
             token_meta,
             output_file: output_file.to_string(),
             max_shard_size,
@@ -111,7 +123,12 @@ impl GgufStreamWriter {
 
         let result = std::mem::replace(
             &mut self.builder,
-            new_builder_with_metadata(&self.model_meta, self.token_meta.as_ref()),
+            new_builder_with_metadata(
+                &self.gguf_metadata,
+                self.token_meta.as_ref(),
+                &self.gguf_architecture,
+                &self.special_token_keys,
+            ),
         )
         .build_to_file(&shard_file)
         .map_err(|e| anyhow::anyhow!("Failed to write shard {}: {}", self.shard_index, e))?;
@@ -176,162 +193,74 @@ impl GgufStreamWriter {
     }
 }
 
-/// Model metadata for GGUF export.
-#[derive(Default)]
-struct GgufModelMetadata {
-    architecture: Option<String>,
-    name: Option<String>,
-    vocab_size: Option<u64>,
-    hidden_size: Option<u64>,
-    num_layers: Option<u64>,
-    num_attention_heads: Option<u64>,
-    num_key_value_heads: Option<u64>,
-    intermediate_size: Option<u64>,
-    max_position_embeddings: Option<u64>,
-    rms_norm_eps: Option<f64>,
-    rope_theta: Option<f64>,
-    // MoE fields
-    num_experts: Option<u64>,
-    num_experts_per_tok: Option<u64>,
-}
-
-impl GgufModelMetadata {
-    /// Extract metadata from JSON, handling nested VLM configs.
-    fn from_json(metadata: &serde_json::Value) -> Self {
-        // Nested config keys for VLMs (same as import)
-        const NESTED_KEYS: &[&str] = &["text_config", "language_config", "llm_config"];
-
-        let text_cfg = NESTED_KEYS
-            .iter()
-            .find_map(|key| metadata.get(*key))
-            .filter(|v| v.is_object());
-
-        // Helper to get number from nested or top-level
-        let get_num = |key: &str| -> Option<u64> {
-            text_cfg
-                .and_then(|cfg| cfg.get(key))
-                .or_else(|| metadata.get(key))
-                .and_then(|v| v.as_u64())
-        };
-
-        let get_f64 = |key: &str| -> Option<f64> {
-            text_cfg
-                .and_then(|cfg| cfg.get(key))
-                .or_else(|| metadata.get(key))
-                .and_then(|v| v.as_f64())
-        };
-
-        Self {
-            architecture: metadata
-                .get("model_type")
-                .or_else(|| metadata.get("architecture"))
-                .and_then(|v| v.as_str())
-                .map(normalize_architecture),
-            name: metadata
-                .get("name")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            vocab_size: get_num("vocab_size"),
-            hidden_size: get_num("hidden_size").or_else(|| get_num("d_model")),
-            num_layers: get_num("num_hidden_layers")
-                .or_else(|| get_num("num_layers"))
-                .or_else(|| get_num("n_layer")),
-            num_attention_heads: get_num("num_attention_heads")
-                .or_else(|| get_num("num_heads"))
-                .or_else(|| get_num("n_head")),
-            num_key_value_heads: get_num("num_key_value_heads"),
-            intermediate_size: get_num("intermediate_size").or_else(|| get_num("d_ff")),
-            max_position_embeddings: get_num("max_position_embeddings")
-                .or_else(|| get_num("n_positions")),
-            rms_norm_eps: get_f64("rms_norm_eps").or_else(|| get_f64("layer_norm_epsilon")),
-            rope_theta: get_f64("rope_theta"),
-            // MoE fields
-            num_experts: get_num("num_local_experts").or_else(|| get_num("num_experts")),
-            num_experts_per_tok: get_num("num_experts_per_tok")
-                .or_else(|| get_num("num_selected_experts")),
-        }
-    }
-}
-
-/// Normalize architecture names to GGUF-compatible values.
-fn normalize_architecture(arch: &str) -> String {
-    match arch.to_lowercase().as_str() {
-        "llama" | "llama2" | "llama3" | "mistral" | "mixtral" => "llama".to_string(),
-        "qwen2" | "qwen" | "qwen2_vl" => "qwen2".to_string(),
-        "phi" | "phi3" | "phi-3" => "phi3".to_string(),
-        "gemma" | "gemma2" => "gemma".to_string(),
-        "deepseek" | "deepseek2" | "deepseek_v2" => "deepseek2".to_string(),
-        "kimi_vl" | "kimi" => "llama".to_string(),
-        other => other.to_lowercase(),
-    }
-}
-
-/// Create a new GGUF builder with full model metadata.
+/// Create a new GGUF builder with pre-resolved model metadata.
 fn new_builder_with_metadata(
-    model_meta: &GgufModelMetadata,
+    meta: &GgufMetadataValues,
     token_meta: Option<&TokenMetadata>,
+    gguf_architecture: &str,
+    special_token_keys: &HashMap<String, String>,
 ) -> GGUFBuilder {
     let mut builder = GGUFBuilder::new();
 
-    let arch = model_meta.architecture.as_deref().unwrap_or("llama");
+    let arch = gguf_architecture;
 
     // General metadata
     builder = builder.add_metadata(
         "general.architecture",
         MetadataValue::String(arch.to_string()),
     );
-    if let Some(name) = &model_meta.name {
+    if let Some(name) = &meta.name {
         builder = builder.add_metadata("general.name", MetadataValue::String(name.clone()));
     }
 
     // Architecture-specific metadata (prefixed with arch name)
-    if let Some(v) = model_meta.vocab_size {
+    if let Some(v) = meta.vocab_size {
         builder =
             builder.add_metadata(format!("{}.vocab_size", arch), MetadataValue::U32(v as u32));
     }
-    if let Some(v) = model_meta.hidden_size {
+    if let Some(v) = meta.hidden_size {
         builder = builder.add_metadata(
             format!("{}.embedding_length", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.num_layers {
+    if let Some(v) = meta.num_layers {
         builder = builder.add_metadata(
             format!("{}.block_count", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.num_attention_heads {
+    if let Some(v) = meta.num_attention_heads {
         builder = builder.add_metadata(
             format!("{}.attention.head_count", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.num_key_value_heads {
+    if let Some(v) = meta.num_key_value_heads {
         builder = builder.add_metadata(
             format!("{}.attention.head_count_kv", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.intermediate_size {
+    if let Some(v) = meta.intermediate_size {
         builder = builder.add_metadata(
             format!("{}.feed_forward_length", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.max_position_embeddings {
+    if let Some(v) = meta.max_position_embeddings {
         builder = builder.add_metadata(
             format!("{}.context_length", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.rms_norm_eps {
+    if let Some(v) = meta.rms_norm_eps {
         builder = builder.add_metadata(
             format!("{}.attention.layer_norm_rms_epsilon", arch),
             MetadataValue::F32(v as f32),
         );
     }
-    if let Some(v) = model_meta.rope_theta {
+    if let Some(v) = meta.rope_theta {
         builder = builder.add_metadata(
             format!("{}.rope.freq_base", arch),
             MetadataValue::F32(v as f32),
@@ -339,22 +268,22 @@ fn new_builder_with_metadata(
     }
 
     // MoE metadata
-    if let Some(v) = model_meta.num_experts {
+    if let Some(v) = meta.num_experts {
         builder = builder.add_metadata(
             format!("{}.expert_count", arch),
             MetadataValue::U32(v as u32),
         );
     }
-    if let Some(v) = model_meta.num_experts_per_tok {
+    if let Some(v) = meta.num_experts_per_tok {
         builder = builder.add_metadata(
             format!("{}.expert_used_count", arch),
             MetadataValue::U32(v as u32),
         );
     }
 
-    // Tokenizer metadata
+    // Tokenizer metadata with pre-resolved special token keys
     if let Some(token_meta) = token_meta
-        && let Ok(token_metadata) = token_meta.to_gguf_metadata()
+        && let Ok(token_metadata) = token_meta.to_gguf_metadata_with_keys(special_token_keys)
     {
         for (key, value) in token_metadata {
             builder = builder.add_metadata(key, value);
@@ -477,47 +406,27 @@ mod tests {
 
     #[test]
     fn test_new_builder_with_no_metadata() {
-        let meta = GgufModelMetadata::default();
-        let builder = new_builder_with_metadata(&meta, None);
+        let meta = GgufMetadataValues::default();
+        let special_token_keys = HashMap::new();
+        let builder = new_builder_with_metadata(&meta, None, "llama", &special_token_keys);
         // Just verify it doesn't panic and returns a builder
         let _ = builder;
     }
 
     #[test]
-    fn test_new_builder_with_arch_only() {
-        let meta = GgufModelMetadata {
-            architecture: Some("llama".to_string()),
-            ..Default::default()
-        };
-        let builder = new_builder_with_metadata(&meta, None);
-        let _ = builder;
-    }
-
-    #[test]
     fn test_new_builder_with_name_only() {
-        let meta = GgufModelMetadata {
+        let meta = GgufMetadataValues {
             name: Some("my-model".to_string()),
             ..Default::default()
         };
-        let builder = new_builder_with_metadata(&meta, None);
-        let _ = builder;
-    }
-
-    #[test]
-    fn test_new_builder_with_both_metadata() {
-        let meta = GgufModelMetadata {
-            architecture: Some("llama".to_string()),
-            name: Some("Llama-7B".to_string()),
-            ..Default::default()
-        };
-        let builder = new_builder_with_metadata(&meta, None);
+        let special_token_keys = HashMap::new();
+        let builder = new_builder_with_metadata(&meta, None, "llama", &special_token_keys);
         let _ = builder;
     }
 
     #[test]
     fn test_new_builder_with_full_metadata() {
-        let meta = GgufModelMetadata {
-            architecture: Some("llama".to_string()),
+        let meta = GgufMetadataValues {
             name: Some("Llama-7B".to_string()),
             vocab_size: Some(32000),
             hidden_size: Some(4096),
@@ -531,91 +440,20 @@ mod tests {
             num_experts: None,
             num_experts_per_tok: None,
         };
-        let builder = new_builder_with_metadata(&meta, None);
+        let special_token_keys = HashMap::new();
+        let builder = new_builder_with_metadata(&meta, None, "llama", &special_token_keys);
         let _ = builder;
     }
 
     #[test]
-    fn test_gguf_model_metadata_from_json_flat() {
-        let json = serde_json::json!({
-            "model_type": "llama",
-            "vocab_size": 32000,
-            "hidden_size": 4096,
-            "num_hidden_layers": 32,
-            "num_attention_heads": 32,
-            "intermediate_size": 11008
-        });
-        let meta = GgufModelMetadata::from_json(&json);
-        assert_eq!(meta.architecture, Some("llama".to_string()));
-        assert_eq!(meta.vocab_size, Some(32000));
-        assert_eq!(meta.hidden_size, Some(4096));
-        assert_eq!(meta.num_layers, Some(32));
-    }
-
-    #[test]
-    fn test_gguf_model_metadata_from_json_nested() {
-        let json = serde_json::json!({
-            "model_type": "kimi_vl",
-            "vocab_size": 163840,
-            "text_config": {
-                "hidden_size": 2048,
-                "num_hidden_layers": 27,
-                "num_attention_heads": 16,
-                "intermediate_size": 11264,
-                "max_position_embeddings": 131072
-            }
-        });
-        let meta = GgufModelMetadata::from_json(&json);
-        assert_eq!(meta.architecture, Some("llama".to_string())); // kimi_vl normalizes to llama
-        assert_eq!(meta.vocab_size, Some(163840));
-        assert_eq!(meta.hidden_size, Some(2048));
-        assert_eq!(meta.num_layers, Some(27));
-        assert_eq!(meta.max_position_embeddings, Some(131072));
-    }
-
-    #[test]
-    fn test_normalize_architecture() {
-        assert_eq!(normalize_architecture("llama"), "llama");
-        assert_eq!(normalize_architecture("Llama2"), "llama");
-        assert_eq!(normalize_architecture("mistral"), "llama");
-        assert_eq!(normalize_architecture("qwen2"), "qwen2");
-        assert_eq!(normalize_architecture("kimi_vl"), "llama");
-        assert_eq!(normalize_architecture("deepseek_v2"), "deepseek2");
-        assert_eq!(normalize_architecture("unknown_arch"), "unknown_arch");
-    }
-
-    #[test]
-    fn test_gguf_model_metadata_moe_fields() {
-        // Mixtral-style config
-        let json = serde_json::json!({
-            "model_type": "mixtral",
-            "num_local_experts": 8,
-            "num_experts_per_tok": 2
-        });
-        let meta = GgufModelMetadata::from_json(&json);
-        assert_eq!(meta.num_experts, Some(8));
-        assert_eq!(meta.num_experts_per_tok, Some(2));
-
-        // Qwen-style config (uses num_experts + num_selected_experts)
-        let json2 = serde_json::json!({
-            "model_type": "qwen2_moe",
-            "num_experts": 60,
-            "num_selected_experts": 4
-        });
-        let meta2 = GgufModelMetadata::from_json(&json2);
-        assert_eq!(meta2.num_experts, Some(60));
-        assert_eq!(meta2.num_experts_per_tok, Some(4));
-    }
-
-    #[test]
     fn test_new_builder_with_moe_metadata() {
-        let meta = GgufModelMetadata {
-            architecture: Some("qwen2".to_string()),
+        let meta = GgufMetadataValues {
             num_experts: Some(64),
             num_experts_per_tok: Some(8),
             ..Default::default()
         };
-        let builder = new_builder_with_metadata(&meta, None);
+        let special_token_keys = HashMap::new();
+        let builder = new_builder_with_metadata(&meta, None, "qwen2", &special_token_keys);
         let _ = builder;
     }
 }

@@ -7,7 +7,6 @@ use gguf_rs_lib::format::{GGUFValueType, MetadataArray, MetadataValue};
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::config::export_config::default_special_token_keys;
 use crate::tokens::{load_token_tree, TokenEntry, TokenIdTree, TokenizerType};
 
 /// GGUF token type constants (matches llama.cpp LLAMA_TOKEN_TYPE_*).
@@ -112,19 +111,13 @@ impl TokenMetadata {
         }
     }
 
-    /// Add tokenizer metadata to a GGUF builder.
+    /// Add tokenizer metadata to a GGUF builder with special token key mappings.
     ///
-    /// Uses default special token key mappings. For custom mappings, use `to_gguf_metadata_with_keys`.
-    pub fn to_gguf_metadata(&self) -> Result<Vec<(String, MetadataValue)>> {
-        self.to_gguf_metadata_with_keys(&HashMap::new())
-    }
-
-    /// Add tokenizer metadata to a GGUF builder with custom special token key mappings.
-    ///
-    /// The `overrides` map is merged with defaults - use empty string value to disable a mapping.
+    /// The `special_token_keys` map maps token types (e.g., "bos") to GGUF metadata keys
+    /// (e.g., "tokenizer.ggml.bos_token_id"). Empty string values disable that mapping.
     pub fn to_gguf_metadata_with_keys(
         &self,
-        overrides: &HashMap<String, String>,
+        special_token_keys: &HashMap<String, String>,
     ) -> Result<Vec<(String, MetadataValue)>> {
         let mut metadata = Vec::new();
 
@@ -170,15 +163,9 @@ impl TokenMetadata {
             MetadataValue::Array(Box::new(types_array)),
         ));
 
-        // Build effective key mapping: defaults + overrides
-        let mut key_map = default_special_token_keys();
-        for (k, v) in overrides {
-            key_map.insert(k.clone(), v.clone());
-        }
-
-        // Add special token IDs using the key mapping
+        // Add special token IDs using the provided key mapping
         for (token_type, id) in &self.special_token_ids {
-            if let Some(gguf_key) = key_map.get(token_type).filter(|k| !k.is_empty()) {
+            if let Some(gguf_key) = special_token_keys.get(token_type).filter(|k| !k.is_empty()) {
                 metadata.push((gguf_key.clone(), MetadataValue::U32(*id)));
             }
         }
@@ -252,7 +239,13 @@ mod tests {
     fn test_to_gguf_metadata() {
         let tree = make_test_tree();
         let meta = TokenMetadata::from_tree(&tree);
-        let gguf_meta = meta.to_gguf_metadata().unwrap();
+
+        // Create special token key mapping
+        let mut special_token_keys = HashMap::new();
+        special_token_keys.insert("bos".to_string(), "tokenizer.ggml.bos_token_id".to_string());
+        special_token_keys.insert("eos".to_string(), "tokenizer.ggml.eos_token_id".to_string());
+
+        let gguf_meta = meta.to_gguf_metadata_with_keys(&special_token_keys).unwrap();
 
         // Check we have the expected keys
         let keys: Vec<&str> = gguf_meta.iter().map(|(k, _)| k.as_str()).collect();

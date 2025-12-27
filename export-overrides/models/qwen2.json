@@ -1,0 +1,13 @@
+{
+  "_comment": "Qwen2 tensor name mappings. Uses standard Llama-style naming.",
+  "gguf_architecture": "qwen2",
+  "architecture_aliases": ["qwen", "qwen2", "qwen2_vl"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id",
+    "eot": "tokenizer.ggml.eot_token_id"
+  },
+  "tensor_map_patterns": {}
+}

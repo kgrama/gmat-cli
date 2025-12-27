@@ -74,6 +74,11 @@ enum Commands {
         /// Tensors above this threshold get moderately higher quality quantization.
         #[arg(long, default_value = "0.1")]
         importance_medium: f32,
+
+        /// Path to model config JSON for tensor name mappings and quant recommendations.
+        /// REQUIRED when using --generate-config. No default or auto-detection.
+        #[arg(long)]
+        model_config: Option<String>,
     },
 }
 
@@ -102,9 +107,18 @@ fn main() -> anyhow::Result<()> {
             validate,
             importance_high,
             importance_medium,
+            model_config,
         } => {
             if generate_config {
-                export::generate_config_template(&model, importance_high, importance_medium)?;
+                let model_config_path = model_config.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("--model-config is required when using --generate-config")
+                })?;
+                export::generate_config_template(
+                    &model,
+                    importance_high,
+                    importance_medium,
+                    model_config_path,
+                )?;
             } else {
                 // Convert MB to bytes if provided
                 let shard_bytes = shard_size.map(|mb| mb * 1_000_000);

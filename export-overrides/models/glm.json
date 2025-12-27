@@ -1,0 +1,17 @@
+{
+  "_comment": "GLM-4 tensor name mappings.",
+  "gguf_architecture": "llama",
+  "architecture_aliases": ["glm", "chatglm", "glm4"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id"
+  },
+  "tensor_map_patterns": {
+    "model.layers.{N}.mlp.gate_up_proj.weight": "blk.{N}.ffn_gate_up.weight",
+    "model.layers.{N}.self_attn.q_proj.bias": "blk.{N}.attn_q.bias",
+    "model.layers.{N}.self_attn.k_proj.bias": "blk.{N}.attn_k.bias",
+    "model.layers.{N}.self_attn.v_proj.bias": "blk.{N}.attn_v.bias"
+  }
+}

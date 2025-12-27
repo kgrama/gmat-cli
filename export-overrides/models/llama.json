@@ -1,0 +1,71 @@
+{
+  "_comment": "Llama-style tensor name mappings. Base patterns for most models.",
+  "gguf_architecture": "llama",
+  "architecture_aliases": ["llama", "llama2", "llama3", "mistral", "mixtral"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id",
+    "sep": "tokenizer.ggml.seperator_token_id",
+    "cls": "tokenizer.ggml.cls_token_id",
+    "mask": "tokenizer.ggml.mask_token_id",
+    "eot": "tokenizer.ggml.eot_token_id"
+  },
+  "metadata_key_aliases": {
+    "hidden_size": ["hidden_size", "d_model"],
+    "num_layers": ["num_hidden_layers", "num_layers", "n_layer"],
+    "num_attention_heads": ["num_attention_heads", "num_heads", "n_head"],
+    "num_key_value_heads": ["num_key_value_heads"],
+    "intermediate_size": ["intermediate_size", "d_ff"],
+    "max_position_embeddings": ["max_position_embeddings", "n_positions"],
+    "rms_norm_eps": ["rms_norm_eps", "layer_norm_epsilon"],
+    "rope_theta": ["rope_theta"],
+    "num_experts": ["num_local_experts", "num_experts"],
+    "num_experts_per_tok": ["num_experts_per_tok", "num_selected_experts"]
+  },
+  "quant_recommendations": {
+    "embed_tokens": { "high": "q8_0", "default": "q6_k" },
+    "lm_head": { "high": "q8_0", "default": "q6_k" },
+    "model.norm": { "high": "q8_0", "default": "q6_k" },
+    "attn.o_proj": { "high": "q6_k", "default": "q5_k_m" },
+    "attn.v_proj": { "high": "q6_k", "default": "q5_k_m" },
+    "mlp.down_proj": { "high": "q6_k", "default": "q5_k_m" },
+    "attn.q_proj": { "default": "q4_k_m" },
+    "attn.k_proj": { "default": "q4_k_m" },
+    "mlp.gate_proj": { "default": "q4_k_m" },
+    "mlp.up_proj": { "default": "q4_k_m" }
+  },
+  "tensor_map_patterns": {
+    "model.embed_tokens.weight": "token_embd.weight",
+    "lm_head.weight": "output.weight",
+    "model.norm.weight": "output_norm.weight",
+
+    "model.layers.{N}.self_attn.q_proj.weight": "blk.{N}.attn_q.weight",
+    "model.layers.{N}.self_attn.k_proj.weight": "blk.{N}.attn_k.weight",
+    "model.layers.{N}.self_attn.v_proj.weight": "blk.{N}.attn_v.weight",
+    "model.layers.{N}.self_attn.o_proj.weight": "blk.{N}.attn_output.weight",
+
+    "model.layers.{N}.mlp.gate_proj.weight": "blk.{N}.ffn_gate.weight",
+    "model.layers.{N}.mlp.up_proj.weight": "blk.{N}.ffn_up.weight",
+    "model.layers.{N}.mlp.down_proj.weight": "blk.{N}.ffn_down.weight",
+
+    "model.layers.{N}.input_layernorm.weight": "blk.{N}.attn_norm.weight",
+    "model.layers.{N}.post_attention_layernorm.weight": "blk.{N}.ffn_norm.weight",
+
+    "model.layers.{N}.mlp.gate.weight": "blk.{N}.ffn_gate_inp.weight",
+    "model.layers.{N}.block_sparse_moe.gate.weight": "blk.{N}.ffn_gate_inp.weight",
+
+    "model.layers.{N}.mlp.shared_experts.gate_proj.weight": "blk.{N}.ffn_gate_shexp.weight",
+    "model.layers.{N}.mlp.shared_experts.up_proj.weight": "blk.{N}.ffn_up_shexp.weight",
+    "model.layers.{N}.mlp.shared_experts.down_proj.weight": "blk.{N}.ffn_down_shexp.weight",
+
+    "model.layers.{N}.mlp.experts.{E}.gate_proj.weight": "blk.{N}.ffn_gate.{E}.weight",
+    "model.layers.{N}.mlp.experts.{E}.up_proj.weight": "blk.{N}.ffn_up.{E}.weight",
+    "model.layers.{N}.mlp.experts.{E}.down_proj.weight": "blk.{N}.ffn_down.{E}.weight",
+
+    "model.layers.{N}.block_sparse_moe.experts.{E}.w1.weight": "blk.{N}.ffn_gate.{E}.weight",
+    "model.layers.{N}.block_sparse_moe.experts.{E}.w2.weight": "blk.{N}.ffn_down.{E}.weight",
+    "model.layers.{N}.block_sparse_moe.experts.{E}.w3.weight": "blk.{N}.ffn_up.{E}.weight"
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "_comment": "Phi-3 tensor name mappings. Fused QKV and gate_up projections.",
+  "gguf_architecture": "phi3",
+  "architecture_aliases": ["phi", "phi3", "phi-3"],
+  "special_token_keys": {
+    "bos": "tokenizer.ggml.bos_token_id",
+    "eos": "tokenizer.ggml.eos_token_id",
+    "unk": "tokenizer.ggml.unknown_token_id",
+    "pad": "tokenizer.ggml.padding_token_id"
+  },
+  "tensor_map_patterns": {
+    "model.layers.{N}.mlp.gate_up_proj.weight": "blk.{N}.ffn_gate_up.weight",
+    "model.layers.{N}.self_attn.qkv_proj.weight": "blk.{N}.attn_qkv.weight"
+  }
+}
