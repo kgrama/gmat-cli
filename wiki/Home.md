@@ -50,6 +50,7 @@ Structure:
 ```
 model.gmat/
 ├── metadata.json          # Architecture and tensor mapping
+├── tokens.bin             # Tokenizer vocabulary (binary format)
 └── tensors/
     ├── <uuid>.gmat       # Individual tensor files
     └── ...
@@ -90,8 +91,8 @@ Follow these guides in order:
 | Page | Description |
 |------|-------------|
 | [Installation](Installation.md) | System requirements (Rust 1.70+, 4+ CPU cores, 8GB+ RAM), installation methods, troubleshooting |
-| [Import Command](Import-Command.md) | SafeTensors→GMAT conversion, config generation, block format selection, sharded input handling |
-| [Export Command](Export-Command.md) | GMAT→GGUF export, quantization type reference, per-tensor overrides, sharding output, Trellis optimization |
+| [Import Command](Import-Command.md) | SafeTensors→GMAT conversion, config generation, block format selection, tokenizer parsing, sharded input handling |
+| [Export Command](Export-Command.md) | GMAT→GGUF export, quantization type reference, per-tensor overrides, model configs, sharding output, Trellis optimization |
 | [Configuration Files](Configuration-Files.md) | import_config.json and export_config.json schemas, examples, config generation workflow |
 | [Technical Details](Technical-Details.md) | Block encoding algorithms, quantization deep-dive (K-quant, I-quant), memory efficiency, hardware requirements |
 | [FAQ](FAQ.md) | Common questions by category: General, Installation, Import, Export, Performance, Quantization, Troubleshooting |

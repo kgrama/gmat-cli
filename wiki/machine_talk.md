@@ -33,8 +33,21 @@ gmat import --model <path> --generate-config  # auto-generate config
 gmat import --model <path> --config import_config.json -o <output>
 
 # Export: GMAT → GGUF
-gmat export --model <gmat-dir> --generate-config  # auto-generate config
+gmat export --model <gmat-dir> --generate-config --model-config <arch>.json  # auto-generate config
 gmat export --model <gmat-dir> --config export_config.json -o model.gguf
+```
+
+## Model Configs
+
+Built-in configs in `export-overrides/models/`: `llama.json`, `qwen2.json`, `deepseek.json`, `gemma.json`, `phi.json`, `glm.json`, `kimi.json`
+
+## GMAT Storage Structure
+
+```
+model.gmat/
+├── metadata.json   # Tensor mappings
+├── tokens.bin      # Tokenizer vocabulary
+└── tensors/        # UUID-named tensor files
 ```
 
 ## Config: import_config.json
@@ -42,8 +55,8 @@ gmat export --model <gmat-dir> --config export_config.json -o model.gguf
 ```json
 {
   "source_format": "safetensors",
-  "block_format": "B16x8",
-  "tensor_map": [{"source_name": "model.embed_tokens.weight", "uuid": "..."}],
+  "block_format": "B8x8",
+  "tensor_map": [{"source": "model.embed_tokens.weight", "target": "<uuid>", "include": true}],
   "metadata": {"architecture": "llama", "vocab_size": 128256}
 }
 ```
@@ -53,6 +66,8 @@ gmat export --model <gmat-dir> --config export_config.json -o model.gguf
 ```json
 {
   "target_format": "gguf",
+  "gguf_architecture": "llama",
+  "gguf_metadata": {"vocab_size": 32000, "hidden_size": 4096, "num_layers": 32},
   "quantization": {
     "default_type": "q4_k_m",
     "scale_optimization": "trellis",
@@ -61,10 +76,7 @@ gmat export --model <gmat-dir> --config export_config.json -o model.gguf
   },
   "tensor_map": [{"source": "<uuid>", "target": "blk.0.attn_q.weight"}],
   "shard_size": 5000000000,
-  "special_token_keys": {
-    "bos": "tokenizer.ggml.bos_token_id",
-    "eos": "tokenizer.ggml.eos_token_id"
-  }
+  "special_token_keys": {"bos": "tokenizer.ggml.bos_token_id", "eos": "tokenizer.ggml.eos_token_id"}
 }
 ```
 
@@ -134,7 +146,7 @@ Llama, Qwen, DeepSeek, Mixtral, Mistral, Gemma, Phi, MiniMax-M2. Vision: LLaVA, 
 
 ## Workflow
 
-1. `gmat import --generate-config` → creates import_config.json
-2. `gmat import --config import_config.json` → creates GMAT storage + tokens.bin
-3. `gmat export --generate-config` → creates export_config.json with quant recommendations
-4. `gmat export --config export_config.json` → creates GGUF
+1. `gmat import --model <path> --generate-config` → creates import_config.json
+2. `gmat import --model <path> --config import_config.json -o <output>` → creates GMAT storage + tokens.bin
+3. `gmat export --model <gmat-dir> --generate-config --model-config <arch>.json` → creates export_config.json with quant recommendations
+4. `gmat export --model <gmat-dir> --config export_config.json -o model.gguf` → creates GGUF

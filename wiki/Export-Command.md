@@ -69,8 +69,29 @@ gmat export [OPTIONS]
 | `--output <PATH>` | `-o` | Output GGUF file path | `model.gguf` |
 | `--shard-size <MB>` | | Shard size in megabytes (e.g., 5000 for 5GB). Overrides config. | None |
 | `--generate-config` | | Generate export_config.json template and exit | - |
+| `--model-config <PATH>` | | Model config JSON for tensor name mappings (required with --generate-config) | - |
 | `--importance-high <FLOAT>` | | Importance threshold for high-quality quant (with --generate-config) | 0.2 |
 | `--importance-medium <FLOAT>` | | Importance threshold for medium-quality quant (with --generate-config) | 0.1 |
+| `--validate` | | Validate output GGUF with llama.cpp (requires `--features validate`) | - |
+
+### Model Config Files
+
+When using `--generate-config`, you must provide a model config file that defines tensor name patterns and GGUF architecture mapping. Built-in configs are available in `export-overrides/models/`:
+
+| Config File | Architectures |
+|-------------|---------------|
+| `llama.json` | Llama, Mistral, Mixtral |
+| `qwen2.json` | Qwen2 models |
+| `deepseek.json` | DeepSeek V2/V3 |
+| `gemma.json` | Google Gemma |
+| `phi.json` | Microsoft Phi |
+| `glm.json` | GLM (ChatGLM) |
+| `kimi.json` | Kimi models |
+
+Each config contains:
+- `gguf_architecture`: GGUF metadata architecture name
+- `tensor_map_patterns`: Regex patterns with placeholders (`{N}` for layer, `{E}` for expert)
+- `quant_recommendations`: Per-tensor type quantization based on importance
 
 ## Quantization Types
 
@@ -235,8 +256,8 @@ gmat export --model ./model.gmat \
 Generate config, review, and export:
 
 ```bash
-# Step 1: Generate configuration template
-gmat export --model ./model.gmat --generate-config
+# Step 1: Generate configuration template (requires model config for tensor mappings)
+gmat export --model ./model.gmat --generate-config --model-config llama.json
 
 # Output:
 # Analyzing 291 tensors...
@@ -260,7 +281,7 @@ gmat export --model ./model.gmat \
 
 ```bash
 # Generate config
-gmat export --model ./llama-70b.gmat --generate-config
+gmat export --model ./llama-70b.gmat --generate-config --model-config llama.json
 
 # Export with 5GB shards
 gmat export --model ./llama-70b.gmat \
@@ -282,7 +303,7 @@ Custom thresholds for more aggressive Q8_0/Q6_K usage:
 
 ```bash
 # Generate config with lower thresholds (more high-quality quants)
-gmat export --model ./model.gmat --generate-config \
+gmat export --model ./model.gmat --generate-config --model-config llama.json \
   --importance-high 0.15 \
   --importance-medium 0.08
 

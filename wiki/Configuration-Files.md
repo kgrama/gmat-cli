@@ -129,6 +129,16 @@ flowchart TD
 ```json
 {
   "target_format": "gguf",
+  "gguf_architecture": "llama",
+  "gguf_metadata": {
+    "name": "model-name",
+    "vocab_size": 32000,
+    "hidden_size": 4096,
+    "num_layers": 32,
+    "num_attention_heads": 32,
+    "intermediate_size": 11008,
+    "rope_theta": 10000.0
+  },
   "quantization": {
     "default_type": "q4_k_m",
     "scale_optimization": "trellis",
@@ -158,10 +168,24 @@ flowchart TD
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `target_format` | string | Yes | `"gguf"` | Target format (currently only `"gguf"` supported) |
+| `gguf_architecture` | string | Yes | - | GGUF architecture name (e.g., `"llama"`, `"qwen2"`, `"phi3"`) |
+| `gguf_metadata` | object | Yes | - | GGUF metadata (vocab_size, hidden_size, num_layers, etc.) |
 | `quantization` | object | Optional | `null` | Quantization settings (if omitted, no quantization applied) |
 | `tensor_map` | array | Yes | `[]` | Tensor export mappings (UUID → GGUF name) |
 | `shard_size` | integer/null | Optional | `null` | Shard size in bytes (null = single file). Note: CLI `--shard-size` uses MB. |
 | `special_token_keys` | object | Optional | `{}` | Special token type to GGUF key mapping overrides (see [Special Token Mapping](#special-token-mapping)) |
+
+#### GGUF Metadata Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Model name for GGUF metadata |
+| `vocab_size` | integer | Vocabulary size |
+| `hidden_size` | integer | Hidden dimension size |
+| `num_layers` | integer | Number of transformer layers |
+| `num_attention_heads` | integer | Number of attention heads |
+| `intermediate_size` | integer | FFN intermediate dimension |
+| `rope_theta` | float | RoPE theta value (optional, for rotary embeddings) |
 
 #### Quantization Configuration
 

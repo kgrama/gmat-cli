@@ -45,9 +45,14 @@ GMAT uses tensor-addressed storage as an intermediate format between training an
 cargo install gmat-cli
 
 # 2. Import: SafeTensors → GMAT
+gmat import --model ./model.safetensors -o ./gmat_output
+# Or with custom config:
 gmat import --model ./model.safetensors --config import_config.json -o ./gmat_output
 
-# 3. Export: GMAT → GGUF with quantization
+# 3. Generate export config (requires model config for tensor name mappings)
+gmat export --model ./gmat_output/model.gmat --generate-config --model-config llama.json
+
+# 4. Export: GMAT → GGUF with quantization
 gmat export --model ./gmat_output/model.gmat --config export_config.json -o model-q4.gguf
 ```
 
@@ -73,8 +78,8 @@ flowchart LR
     style E fill:#e8f5e9
 ```
 
-1. **Import Phase**: Convert SafeTensors to GMAT format with block-encoded, log-domain representation.
-2. **Export Phase**: Generate GGUF files with custom quantization profiles from the same GMAT source.
+1. **Import Phase**: Convert SafeTensors to GMAT format with block-encoded, log-domain representation. Automatically parses tokenizer files (HuggingFace JSON or tiktoken format).
+2. **Export Phase**: Generate GGUF files with custom quantization profiles from the same GMAT source. Embeds tokenizer vocabulary and special tokens in GGUF metadata.
 
 This separation enables:
 - Multiple deployment variants from a single source
@@ -108,9 +113,10 @@ This separation enables:
 
 | Category | Architectures |
 |----------|---------------|
-| **Text Models** | Llama, Qwen, Phi, Gemma, DeepSeek, Mistral, Mixtral (MoE), MiniMax |
-| **Vision-Language** | LLaVA, Qwen-VL, Kimi-VL, InternVL* |
-| **Encoder-Decoder** | T5, BART, Whisper* |
+| **Text Models** | Llama, Qwen2, Phi, Gemma, DeepSeek, Mistral, Mixtral (MoE), GLM, Kimi |
+| **Vision-Language** | LLaVA, Qwen-VL, Kimi-VL |
+
+See [export-overrides/models/](export-overrides/models/) for built-in architecture configurations (Llama, Qwen2, DeepSeek, Gemma, Phi, GLM, Kimi).
 
 ### Quantization Types
 

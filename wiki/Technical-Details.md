@@ -701,12 +701,14 @@ gmat export --moe-limit 4  # Only export first 4 experts (debugging)
 ```
 model.gmat/
 ├── metadata.json                    # Model metadata and tensor index
-├── e268e395-888f-49ed-9f59-24ea9d10be77.gmat  # Tensor: token_embd.weight
-├── df11f72a-85ce-41e1-b354-1253749bd43d.gmat  # Tensor: blk.0.attn_q.weight
-├── 926d821f-1509-483e-9fc2-dc7d5db8c9d0.gmat  # Tensor: blk.0.attn_k.weight
-├── cca2df3c-6b4c-4559-95ad-d0bbf71efec8.gmat  # Tensor: blk.0.attn_v.weight
-├── ...
-└── 3b6d6f4a-9cf5-4d97-9b08-ce07ddc0435d.gmat  # Tensor: output.weight
+├── tokens.bin                       # Tokenizer vocabulary (binary tree format)
+└── tensors/
+    ├── e268e395-888f-49ed-9f59-24ea9d10be77.gmat  # Tensor: token_embd.weight
+    ├── df11f72a-85ce-41e1-b354-1253749bd43d.gmat  # Tensor: blk.0.attn_q.weight
+    ├── 926d821f-1509-483e-9fc2-dc7d5db8c9d0.gmat  # Tensor: blk.0.attn_k.weight
+    ├── cca2df3c-6b4c-4559-95ad-d0bbf71efec8.gmat  # Tensor: blk.0.attn_v.weight
+    ├── ...
+    └── 3b6d6f4a-9cf5-4d97-9b08-ce07ddc0435d.gmat  # Tensor: output.weight
 ```
 
 **Benefits:**
@@ -796,6 +798,92 @@ During import, GMAT extracts metadata from:
 1. **config.json** (preferred, HuggingFace format)
 2. **SafeTensors header metadata** (fallback)
 3. **Nested configs** (for VLMs with vision + language configs)
+
+---
+
+## 7. Tokenizer Processing
+
+### Tokenizer Discovery
+
+During import, GMAT automatically discovers tokenizer files in the model directory:
+
+**Priority order:**
+1. `tokenizer.json` (HuggingFace format)
+2. `tokenizer_config.json` (special token definitions)
+3. Tiktoken-format files (base64-encoded mergeable ranks)
+
+### HuggingFace Tokenizer Format
+
+GMAT parses the HuggingFace `tokenizer.json` structure:
+
+```json
+{
+  "model": {
+    "vocab": {"<s>": 0, "</s>": 1, ...},
+    "merges": ["▁ t", "▁ a", ...]
+  },
+  "added_tokens": [
+    {"id": 0, "content": "<s>", "special": true}
+  ]
+}
+```
+
+**Extracted data:**
+- Token vocabulary (ID → token string)
+- Token scores (from merges order)
+- Token types (normal, control, user_defined, byte, unknown)
+
+### Special Token Handling
+
+Special tokens are extracted from `tokenizer_config.json`:
+
+```json
+{
+  "bos_token": "<s>",
+  "eos_token": "</s>",
+  "pad_token": "<pad>",
+  "unk_token": "<unk>"
+}
+```
+
+**Dynamic extraction:** Any field ending in `_token` is captured as a special token.
+
+### Binary Token Storage (tokens.bin)
+
+Tokens are stored in a binary tree format optimized for GGUF embedding:
+
+```
+Header:
+  - num_tokens (u32)
+  - tree_depth (u16)
+  - special_token_count (u16)
+
+Token entries:
+  - token_id (u32)
+  - token_bytes (length-prefixed)
+  - score (f32)
+  - token_type (u8)
+
+Special tokens:
+  - type_name (length-prefixed string)
+  - token_id (u32)
+```
+
+### GGUF Token Embedding
+
+During export, tokens are embedded in GGUF metadata:
+
+| GGUF Key | Description |
+|----------|-------------|
+| `tokenizer.ggml.tokens` | Token strings array |
+| `tokenizer.ggml.scores` | Token scores array |
+| `tokenizer.ggml.token_type` | Token types array |
+| `tokenizer.ggml.bos_token_id` | Beginning-of-sequence token ID |
+| `tokenizer.ggml.eos_token_id` | End-of-sequence token ID |
+| `tokenizer.ggml.padding_token_id` | Padding token ID |
+| `tokenizer.ggml.unknown_token_id` | Unknown token ID |
+
+**Custom mappings:** Use `special_token_keys` in export config to override default GGUF key names.
 
 ---
 

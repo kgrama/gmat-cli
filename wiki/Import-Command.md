@@ -164,12 +164,25 @@ The import process creates a `.gmat` directory with the following structure:
 ```
 output/model.gmat/
 ├── metadata.json          # Model configuration and tensor mappings
+├── tokens.bin             # Tokenizer vocabulary (binary tree format)
 └── tensors/
     ├── <uuid1>.gmat       # Individual tensor file (block-sparse encoded)
     ├── <uuid2>.gmat
     ├── <uuid3>.gmat
     └── ...
 ```
+
+### Tokenizer Processing
+
+During import, GMAT automatically discovers and processes tokenizer files from the model directory:
+
+**Supported formats:**
+- **HuggingFace JSON**: `tokenizer.json` + `tokenizer_config.json`
+- **Tiktoken**: Base64-encoded mergeable ranks files
+
+**Output:** `tokens.bin` contains the vocabulary in a binary tree format optimized for GGUF embedding.
+
+**Special tokens:** Automatically extracted from tokenizer config (BOS, EOS, PAD, UNK, etc.) and stored for export.
 
 ### metadata.json Structure
 
