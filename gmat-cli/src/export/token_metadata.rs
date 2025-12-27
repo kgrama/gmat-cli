@@ -178,10 +178,8 @@ impl TokenMetadata {
 
         // Add special token IDs using the key mapping
         for (token_type, id) in &self.special_token_ids {
-            if let Some(gguf_key) = key_map.get(token_type) {
-                if !gguf_key.is_empty() {
-                    metadata.push((gguf_key.clone(), MetadataValue::U32(*id)));
-                }
+            if let Some(gguf_key) = key_map.get(token_type).filter(|k| !k.is_empty()) {
+                metadata.push((gguf_key.clone(), MetadataValue::U32(*id)));
             }
         }
 

@@ -19,6 +19,7 @@ use transform_storage::conversions::gguf_quant::{
     GgufQuantType, ScaleOptimization, compute_tensor_importance, quantize_to_gguf,
 };
 
+use crate::common::runtime::{ProgressTracker, run_blocking};
 use crate::workqueue::{PipelineState, run_pipeline};
 
 /// Represents a tensor entry from metadata - either simple 2D or N-D with planes.
@@ -189,10 +190,7 @@ fn analyze_model_tensors(
     tensors_dir: &std::path::Path,
     thresholds: &ImportanceThresholds,
 ) -> Vec<TensorAnalysis> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let total = tensor_entries.len();
-    let processed = AtomicUsize::new(0);
+    let progress = ProgressTracker::new(tensor_entries.len(), "Analyzed tensors");
 
     let results: Vec<TensorAnalysis> = tensor_entries
         .par_iter()
@@ -238,13 +236,7 @@ fn analyze_model_tensors(
             let gguf_name = safetensor_to_gguf_name(source_name);
             let quant_type = recommend_quant_type(source_name, importance, rows, cols, thresholds);
 
-            // Progress update
-            let count = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            if count.is_multiple_of(100) || count == total {
-                eprint!("\rAnalyzed {}/{} tensors...", count, total);
-                use std::io::Write;
-                let _ = std::io::stderr().flush();
-            }
+            progress.increment_every(100);
 
             Some(TensorAnalysis {
                 source_name: source_name.to_string(),
@@ -258,7 +250,7 @@ fn analyze_model_tensors(
         })
         .collect();
 
-    eprintln!(); // New line after progress
+    progress.finish();
     results
 }
 
@@ -400,8 +392,7 @@ pub fn generate_config_template(
     importance_high: f32,
     importance_medium: f32,
 ) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(generate_config_template_async(
+    run_blocking(generate_config_template_async(
         model_path,
         importance_high,
         importance_medium,
@@ -542,9 +533,8 @@ pub fn run(
     output_path: Option<&str>,
     shard_size_override: Option<u64>,
 ) -> Result<()> {
-    // Build tokio runtime and run async pipeline
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(
+    // Run async pipeline
+    run_blocking(run_async(
         model_path,
         config_path,
         output_path,

@@ -75,30 +75,32 @@ fn map_moe_tensor(layer_num: &str, tensor_type: &str) -> Option<String> {
 
     // Expert weights - Qwen/DeepSeek style
     // Pattern: mlp.experts.{j}.{gate,up,down}_proj.weight
-    if let Some(rest) = tensor_type.strip_prefix("mlp.experts.") {
-        if let Some((expert_idx, proj)) = parse_expert_index(rest) {
-            let gguf_suffix = match proj {
-                "gate_proj.weight" => format!("ffn_gate.{}.weight", expert_idx),
-                "up_proj.weight" => format!("ffn_up.{}.weight", expert_idx),
-                "down_proj.weight" => format!("ffn_down.{}.weight", expert_idx),
-                _ => return None,
-            };
-            return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
-        }
+    if let Some((expert_idx, proj)) = tensor_type
+        .strip_prefix("mlp.experts.")
+        .and_then(parse_expert_index)
+    {
+        let gguf_suffix = match proj {
+            "gate_proj.weight" => format!("ffn_gate.{}.weight", expert_idx),
+            "up_proj.weight" => format!("ffn_up.{}.weight", expert_idx),
+            "down_proj.weight" => format!("ffn_down.{}.weight", expert_idx),
+            _ => return None,
+        };
+        return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
     }
 
     // Expert weights - Mixtral style
     // Pattern: block_sparse_moe.experts.{j}.w1/w2/w3.weight
-    if let Some(rest) = tensor_type.strip_prefix("block_sparse_moe.experts.") {
-        if let Some((expert_idx, proj)) = parse_expert_index(rest) {
-            let gguf_suffix = match proj {
-                "w1.weight" => format!("ffn_gate.{}.weight", expert_idx),
-                "w2.weight" => format!("ffn_down.{}.weight", expert_idx),
-                "w3.weight" => format!("ffn_up.{}.weight", expert_idx),
-                _ => return None,
-            };
-            return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
-        }
+    if let Some((expert_idx, proj)) = tensor_type
+        .strip_prefix("block_sparse_moe.experts.")
+        .and_then(parse_expert_index)
+    {
+        let gguf_suffix = match proj {
+            "w1.weight" => format!("ffn_gate.{}.weight", expert_idx),
+            "w2.weight" => format!("ffn_down.{}.weight", expert_idx),
+            "w3.weight" => format!("ffn_up.{}.weight", expert_idx),
+            _ => return None,
+        };
+        return Some(format!("blk.{}.{}", layer_num, gguf_suffix));
     }
 
     None
@@ -282,12 +284,7 @@ pub fn quant_type_to_gguf_tensor_type(
     }
 }
 
-/// Get number of available CPU cores.
-pub fn num_cpus() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-}
+pub use crate::common::runtime::num_cpus;
 
 #[cfg(test)]
 mod tests {

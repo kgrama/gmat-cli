@@ -207,7 +207,7 @@ fn parse_unigram_vocab(
 
     build_tree(vocab.iter().enumerate().filter_map(|(idx, item)| {
         let arr = item.as_array()?;
-        let token = arr.get(0)?.as_str()?;
+        let token = arr.first()?.as_str()?;
         let score = arr.get(1)?.as_f64()? as f32;
         Some(make_entry(idx as u32, token, special_mapping).with_score(score))
     }))

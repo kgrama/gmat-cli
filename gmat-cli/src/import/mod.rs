@@ -14,6 +14,7 @@ use std::path::Path;
 use transform_storage::BlockFormat;
 use uuid::Uuid;
 
+use crate::common::runtime::{ProgressTracker, run_blocking};
 use crate::common::{discover_safetensor_files, load_config};
 use crate::config::import_config::{ImportConfig, TensorMapping};
 
@@ -24,8 +25,7 @@ use streaming::{SavedTensor, run_streaming_import};
 ///
 /// Uses tokio-rayon for parallel metadata extraction and tensor mapping.
 pub fn generate_config_template(model_path: &str) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(generate_config_template_async(model_path))
+    run_blocking(generate_config_template_async(model_path))
 }
 
 /// Async implementation of import config generation.
@@ -128,8 +128,7 @@ pub fn run(model_path: &str, config_path: Option<&str>, output_path: Option<&str
     write_import_metadata(&output_dir, &config, &saved)?;
 
     // Parse and store tokenizer files
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(parse_and_store_tokenizer(path, &output_dir))?;
+    run_blocking(parse_and_store_tokenizer(path, &output_dir))?;
 
     println!("\n=== Import Complete: {} tensors ===", saved.len());
     Ok(())
@@ -327,10 +326,7 @@ fn dtype_byte_size(dtype: safetensors::Dtype) -> u64 {
 fn collect_tensor_mappings_with_stats(
     safetensor_files: &[std::path::PathBuf],
 ) -> Result<(Vec<TensorMapping>, TensorStats)> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let total_files = safetensor_files.len();
-    let processed_files = AtomicUsize::new(0);
+    let progress = ProgressTracker::new(safetensor_files.len(), "Processed files");
 
     let results: Vec<(Vec<TensorMapping>, TensorStats)> = safetensor_files
         .par_iter()
@@ -398,20 +394,13 @@ fn collect_tensor_mappings_with_stats(
                 );
             }
 
-            // Progress update
-            let count = processed_files.fetch_add(1, Ordering::Relaxed) + 1;
-            eprint!(
-                "\rProcessed {}/{} files ({} tensors)...",
-                count, total_files, stats.total_tensors
-            );
-            use std::io::Write;
-            let _ = std::io::stderr().flush();
+            progress.increment_with_extra(&format!("({} tensors)", stats.total_tensors));
 
             Ok((mappings, stats))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    eprintln!(); // New line after progress
+    progress.finish();
 
     // Merge all results
     let mut all_mappings = Vec::new();
@@ -516,18 +505,6 @@ fn parse_block_format(s: &str) -> Result<BlockFormat> {
         ),
     }
 }
-
-/// Pipe trait for fluent syntax.
-#[allow(dead_code)]
-trait Pipe: Sized {
-    fn pipe<F, R>(self, f: F) -> R
-    where
-        F: FnOnce(Self) -> R,
-    {
-        f(self)
-    }
-}
-impl<T> Pipe for T {}
 
 #[cfg(test)]
 mod tests {
